@@ -34,11 +34,17 @@ jobs:
         run: rustup show
         working-directory: src-tauri
 
+      - name: Check immutable dependency pins
+        run: pnpm check:dependencies
+
       - name: Check Kudu parity contract
         run: pnpm check:parity
 
       - name: Check architecture boundaries
         run: pnpm check:architecture
+
+      - name: Check documentation links
+        run: pnpm check:docs
 
       - name: Build frontend
         run: pnpm build

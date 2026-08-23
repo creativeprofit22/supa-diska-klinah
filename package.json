@@ -11,8 +11,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "check": "pnpm check:parity && pnpm check:architecture && pnpm build",
+    "check": "pnpm check:dependencies && pnpm check:parity && pnpm check:architecture && pnpm check:docs && pnpm build",
     "check:architecture": "node scripts/check-architecture.mjs",
+    "check:dependencies": "node scripts/check-dependencies.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
     "check:parity": "node scripts/check-parity.mjs",
     "tauri": "tauri"
   },
