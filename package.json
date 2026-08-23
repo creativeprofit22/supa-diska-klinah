@@ -15,6 +15,7 @@
     "check:architecture": "node scripts/check-architecture.mjs",
     "check:dependencies": "node scripts/check-dependencies.mjs",
     "check:docs": "node scripts/check-docs.mjs",
+    "check:native-ci": "node scripts/check-native-ci.mjs",
     "check:parity": "node scripts/check-parity.mjs",
     "tauri": "tauri"
   },
