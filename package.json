@@ -17,6 +17,7 @@
     "check:docs": "node scripts/check-docs.mjs",
     "check:native-ci": "node scripts/check-native-ci.mjs",
     "check:parity": "node scripts/check-parity.mjs",
+    "test:native": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-native.ps1 -Target",
     "tauri": "tauri"
   },
   "dependencies": {
