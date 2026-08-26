@@ -15,6 +15,61 @@ if (-not (Test-Path -Path $helper -PathType Leaf)) {
   throw "Privileged helper is missing beside the $Target application."
 }
 
+function Stop-ProcessTreeAndWait {
+  param([Diagnostics.Process]$RootProcess)
+
+  $treeIds = [Collections.Generic.HashSet[int]]::new()
+  $treeIds.Add($RootProcess.Id) | Out-Null
+
+  for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    $changed = $true
+    $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    while ($changed) {
+      $changed = $false
+      foreach ($candidate in $processes) {
+        if ($treeIds.Contains([int]$candidate.ParentProcessId) -and $treeIds.Add([int]$candidate.ProcessId)) {
+          $changed = $true
+        }
+      }
+    }
+
+    $runningIds = @($treeIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    if ($runningIds.Count -eq 0) {
+      return
+    }
+
+    Stop-Process -Id $runningIds -Force -ErrorAction SilentlyContinue
+    Wait-Process -Id $runningIds -Timeout 1 -ErrorAction SilentlyContinue
+  }
+
+  $remainingIds = @($treeIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+  if ($remainingIds.Count -gt 0) {
+    throw "Native smoke process tree did not stop: $($remainingIds -join ', ')."
+  }
+}
+
+function Remove-RedirectedOutputFiles {
+  param([string[]]$Paths)
+
+  for ($attempt = 0; $attempt -lt 50; $attempt++) {
+    $remainingPaths = @($Paths | Where-Object { Test-Path -LiteralPath $_ })
+    if ($remainingPaths.Count -eq 0) {
+      return
+    }
+
+    try {
+      Remove-Item -LiteralPath $remainingPaths -Force
+      return
+    }
+    catch [IO.IOException], [UnauthorizedAccessException] {
+      if ($attempt -eq 49) {
+        throw
+      }
+      Start-Sleep -Milliseconds 100
+    }
+  }
+}
+
 Add-Type -TypeDefinition @"
 using System;
 using System.ComponentModel;
@@ -114,11 +169,8 @@ try {
 }
 finally {
   if ($process) {
-    $process.Refresh()
-    if (-not $process.HasExited) {
-      Stop-Process -Id $process.Id -PassThru | Wait-Process
-    }
+    Stop-ProcessTreeAndWait -RootProcess $process
     $process.Dispose()
   }
-  Remove-Item -Path $stdoutPath, $stderrPath -Force
+  Remove-RedirectedOutputFiles -Paths $stdoutPath, $stderrPath
 }
