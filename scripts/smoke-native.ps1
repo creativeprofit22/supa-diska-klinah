@@ -75,8 +75,19 @@ using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
+public enum NativeWindowState
+{
+    None,
+    Hidden,
+    Visible
+}
+
 public static class ProcessTokenProbe
 {
+    private const int ExtendedWindowStyleIndex = -20;
+    private const long ToolWindowStyle = 0x80L;
+    private delegate bool EnumWindowsProcedure(IntPtr window, IntPtr parameter);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct TokenElevation { public int TokenIsElevated; }
 
@@ -95,13 +106,19 @@ public static class ProcessTokenProbe
     private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
 
     [DllImport("user32.dll")]
-    public static extern bool ShowWindowAsync(IntPtr window, int command);
+    private static extern bool EnumWindows(EnumWindowsProcedure callback, IntPtr parameter);
 
     [DllImport("user32.dll")]
-    public static extern bool IsWindowVisible(IntPtr window);
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
     [DllImport("user32.dll")]
-    public static extern bool IsIconic(IntPtr window);
+    private static extern bool IsWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr window);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
 
     public static bool IsElevated(IntPtr process)
     {
@@ -118,6 +135,31 @@ public static class ProcessTokenProbe
             return elevation.TokenIsElevated != 0;
         }
         finally { CloseHandle(token); }
+    }
+
+    public static NativeWindowState WindowState(int processId)
+    {
+        NativeWindowState state = NativeWindowState.None;
+        EnumWindows(delegate(IntPtr window, IntPtr parameter)
+        {
+            uint ownerProcessId;
+            GetWindowThreadProcessId(window, out ownerProcessId);
+            if (ownerProcessId != processId)
+                return true;
+
+            bool visible = IsWindowVisible(window);
+            if (!IsWindow(window))
+                return true;
+            if ((GetWindowLongPtr(window, ExtendedWindowStyleIndex).ToInt64() & ToolWindowStyle) != 0)
+                return true;
+
+            if (visible)
+                state = NativeWindowState.Visible;
+            else if (state == NativeWindowState.None)
+                state = NativeWindowState.Hidden;
+            return true;
+        }, IntPtr.Zero);
+        return state;
     }
 
     public static uint ExitCode(IntPtr process)
@@ -146,16 +188,12 @@ try {
       $stderr = Get-Content -Path $stderrPath -Raw
       throw "Native executable exited during the smoke window with code $exitCode.`nstdout:`n$stdout`nstderr:`n$stderr"
     }
-    if ($process.MainWindowHandle -ne [IntPtr]::Zero) {
+    $windowState = [ProcessTokenProbe]::WindowState($process.Id)
+    if ($windowState -eq [NativeWindowState]::Visible) {
+      throw "Native executable became visible during the smoke window."
+    }
+    if ($windowState -eq [NativeWindowState]::Hidden) {
       $windowSeen = $true
-      [ProcessTokenProbe]::ShowWindowAsync($process.MainWindowHandle, 0) | Out-Null
-      Start-Sleep -Milliseconds 50
-      $process.Refresh()
-      $visible = [ProcessTokenProbe]::IsWindowVisible($process.MainWindowHandle)
-      $minimized = [ProcessTokenProbe]::IsIconic($process.MainWindowHandle)
-      if ($visible -and -not $minimized) {
-        throw "Native executable became visible during the smoke window."
-      }
     }
     Start-Sleep -Milliseconds 100
   }
