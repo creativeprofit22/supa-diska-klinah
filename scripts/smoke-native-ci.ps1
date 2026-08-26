@@ -25,8 +25,9 @@ try {
   }
 
   $credential = [Management.Automation.PSCredential]::new("$env:COMPUTERNAME\$username", $securePassword)
+  $profilePath = Join-Path $env:SystemDrive "Users\$username"
   $script = Join-Path $PSScriptRoot "smoke-native.ps1"
-  $command = "`$env:TEMP = '$($smokeTempPath.Replace("'", "''"))'; `$env:TMP = `$env:TEMP; & '$($script.Replace("'", "''"))' -Target '$Target'"
+  $command = "`$env:USERPROFILE = '$profilePath'; `$env:HOME = `$env:USERPROFILE; `$env:HOMEDRIVE = '$env:SystemDrive'; `$env:HOMEPATH = '\Users\$username'; `$env:LOCALAPPDATA = '$profilePath\AppData\Local'; `$env:APPDATA = '$profilePath\AppData\Roaming'; `$env:TEMP = '$($smokeTempPath.Replace("'", "''"))'; `$env:TMP = `$env:TEMP; & '$($script.Replace("'", "''"))' -Target '$Target'"
   $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
   $shell = (Get-Process -Id $PID).Path
   $process = Start-Process -FilePath $shell -ArgumentList "-NoProfile", "-EncodedCommand", $encodedCommand -Credential $credential -LoadUserProfile -WorkingDirectory (Get-Location).Path -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -Wait -PassThru
