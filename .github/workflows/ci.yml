@@ -59,6 +59,12 @@ jobs:
         run: cargo fmt --all -- --check
         working-directory: src-tauri
 
+      - name: Prepare privileged helper for Clippy
+        run: pnpm build:helper -- --target x86_64-pc-windows-msvc
+        env:
+          TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc
+          TAURI_ENV_DEBUG: "true"
+
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
         working-directory: src-tauri
