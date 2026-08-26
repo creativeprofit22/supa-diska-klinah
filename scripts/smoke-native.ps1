@@ -80,7 +80,7 @@ $stdoutPath = [IO.Path]::GetTempFileName()
 $stderrPath = [IO.Path]::GetTempFileName()
 $process = $null
 try {
-  $process = Start-Process -FilePath $exe -WindowStyle Minimized -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+  $process = Start-Process -FilePath $exe -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
   $processHandle = $process.Handle
   $windowSeen = $false
   for ($attempt = 0; $attempt -lt 80; $attempt++) {

@@ -17,7 +17,7 @@ try {
   $user = New-LocalUser -Name $username -Password $securePassword -AccountNeverExpires -PasswordNeverExpires -UserMayNotChangePassword
   $userCreated = $true
 
-  $smokeTempPath = Join-Path ([IO.Path]::GetTempPath()) "supa-native-smoke-$PID"
+  $smokeTempPath = Join-Path $env:SystemRoot "Temp\supa-native-smoke-$PID"
   New-Item -ItemType Directory -Path $smokeTempPath | Out-Null
   & icacls.exe $smokeTempPath /grant "*$($user.SID.Value):(OI)(CI)M" /Q | Out-Null
   if ($LASTEXITCODE -ne 0) {

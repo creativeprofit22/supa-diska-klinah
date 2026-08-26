@@ -33,7 +33,15 @@ public static class EarlyExitFixture
     }
   }
 
-  Write-Output "Native smoke early-exit diagnostics verified."
+  $smokeSource = Get-Content -Path "$PSScriptRoot/smoke-native.ps1" -Raw
+  if (-not $smokeSource.Contains("-WindowStyle Hidden")) {
+    throw "Native smoke must prevent the CI desktop from showing its process window."
+  }
+  if ($smokeSource.IndexOf('$env:SUPA_DISKA_KLINAH_SMOKE_MINIMIZED') -gt $smokeSource.IndexOf('Start-Process')) {
+    throw "Native smoke must configure hidden startup before launching the executable."
+  }
+
+  Write-Output "Native smoke early-exit diagnostics and hidden launch verified."
 }
 finally {
   Remove-Item -Path $tempDirectory -Recurse -Force

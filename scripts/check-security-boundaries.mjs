@@ -112,6 +112,7 @@ if (
     ciWorkflow,
   ) ||
   !/New-LocalUser -Name \$username -Password \$securePassword/.test(nativeSmokeCi) ||
+  !/Join-Path \$env:SystemRoot "Temp\\supa-native-smoke-\$PID"/.test(nativeSmokeCi) ||
   !/icacls\.exe \$smokeTempPath \/grant/.test(nativeSmokeCi) ||
   !/`\$env:TEMP =/.test(nativeSmokeCi) ||
   !/-Credential \$credential -LoadUserProfile/.test(nativeSmokeCi) ||
