@@ -117,6 +117,8 @@ if (
   !/`\$env:USERPROFILE =/.test(nativeSmokeCi) ||
   !/`\$env:LOCALAPPDATA =/.test(nativeSmokeCi) ||
   !/`\$env:TEMP =/.test(nativeSmokeCi) ||
+  !/-ArgumentList "-NoProfile", "-File", \$commandPath/.test(nativeSmokeCi) ||
+  nativeSmokeCi.includes("-EncodedCommand") ||
   !/-Credential \$credential -LoadUserProfile/.test(nativeSmokeCi) ||
   !/Remove-LocalUser -Name \$username/.test(nativeSmokeCi)
 ) {

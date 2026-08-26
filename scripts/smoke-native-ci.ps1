@@ -27,10 +27,21 @@ try {
   $credential = [Management.Automation.PSCredential]::new("$env:COMPUTERNAME\$username", $securePassword)
   $profilePath = Join-Path $env:SystemDrive "Users\$username"
   $script = Join-Path $PSScriptRoot "smoke-native.ps1"
-  $command = "`$env:USERPROFILE = '$profilePath'; `$env:HOME = `$env:USERPROFILE; `$env:HOMEDRIVE = '$env:SystemDrive'; `$env:HOMEPATH = '\Users\$username'; `$env:LOCALAPPDATA = '$profilePath\AppData\Local'; `$env:APPDATA = '$profilePath\AppData\Roaming'; `$env:TEMP = '$($smokeTempPath.Replace("'", "''"))'; `$env:TMP = `$env:TEMP; & '$($script.Replace("'", "''"))' -Target '$Target'"
-  $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+  $commandPath = Join-Path $smokeTempPath "run-smoke.ps1"
+  @"
+`$env:USERPROFILE = '$profilePath'
+`$env:HOME = `$env:USERPROFILE
+`$env:HOMEDRIVE = '$env:SystemDrive'
+`$env:HOMEPATH = '\Users\$username'
+`$env:LOCALAPPDATA = '$profilePath\AppData\Local'
+`$env:APPDATA = '$profilePath\AppData\Roaming'
+`$env:TEMP = '$($smokeTempPath.Replace("'", "''"))'
+`$env:TMP = `$env:TEMP
+& '$($script.Replace("'", "''"))' -Target '$Target'
+"@ | Set-Content -Path $commandPath -Encoding UTF8
+
   $shell = (Get-Process -Id $PID).Path
-  $process = Start-Process -FilePath $shell -ArgumentList "-NoProfile", "-EncodedCommand", $encodedCommand -Credential $credential -LoadUserProfile -WorkingDirectory (Get-Location).Path -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -Wait -PassThru
+  $process = Start-Process -FilePath $shell -ArgumentList "-NoProfile", "-File", $commandPath -Credential $credential -LoadUserProfile -WorkingDirectory (Get-Location).Path -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -Wait -PassThru
 
   [Console]::Out.Write((Get-Content -Path $stdoutPath -Raw))
   [Console]::Error.Write((Get-Content -Path $stderrPath -Raw))
