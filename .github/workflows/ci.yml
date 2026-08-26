@@ -112,6 +112,6 @@ jobs:
       - name: Build native debug executable
         run: pnpm tauri build --debug --no-bundle --target ${{ matrix.target }}
 
-      - name: Launch native executable
+      - name: Launch native executable as standard user
         shell: pwsh
-        run: ./scripts/smoke-native.ps1 -Target ${{ matrix.target }}
+        run: ./scripts/smoke-native-ci.ps1 -Target ${{ matrix.target }}

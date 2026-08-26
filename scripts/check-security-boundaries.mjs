@@ -20,6 +20,8 @@ const commandSource = read("src-tauri/src/commands/security.rs");
 const brokerSource = read("src-tauri/crates/windows-platform/src/security/broker.rs");
 const helperSource = read("src-tauri/crates/windows-platform/src/security/helper.rs");
 const protocolSource = read("src-tauri/crates/windows-platform/src/security/protocol.rs");
+const ciWorkflow = read(".github/workflows/ci.yml");
+const nativeSmokeCi = read("scripts/smoke-native-ci.ps1");
 const focus = process.argv[2] ?? "all";
 const focusMessages = {
   all: "Windows and Tauri security boundaries verified.",
@@ -104,6 +106,16 @@ if (
   app.indexOf("require_standard_user()") > app.indexOf("tauri::Builder::default()")
 ) {
   fail("main startup must reject elevation before constructing Tauri");
+}
+if (
+  !/run:\s+\.\/scripts\/smoke-native-ci\.ps1 -Target \$\{\{ matrix\.target \}\}/.test(
+    ciWorkflow,
+  ) ||
+  !/New-LocalUser -Name \$username -Password \$securePassword/.test(nativeSmokeCi) ||
+  !/-Credential \$credential -LoadUserProfile/.test(nativeSmokeCi) ||
+  !/Remove-LocalUser -Name \$username/.test(nativeSmokeCi)
+) {
+  fail("native CI must launch through a temporary standard-user account");
 }
 if (cargoFiles.some((cargo) => /tauri-plugin-(?:shell|fs)/.test(cargo))) {
   fail("generic shell and filesystem plugins are forbidden");
