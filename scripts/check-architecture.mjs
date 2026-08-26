@@ -37,7 +37,12 @@ const packages = new Map(
     .filter((pkg) => workspaceIds.has(pkg.id))
     .map((pkg) => [pkg.name, pkg]),
 );
-const expectedPackages = ["cleanup-core", "supa-diska-klinah", "windows-platform"];
+const expectedPackages = [
+  "cleanup-core",
+  "privileged-helper",
+  "supa-diska-klinah",
+  "windows-platform",
+];
 
 if (
   packages.size !== expectedPackages.length ||
@@ -56,6 +61,7 @@ function workspaceDependencies(packageName) {
 
 const expectedEdges = new Map([
   ["supa-diska-klinah", ["windows-platform"]],
+  ["privileged-helper", ["windows-platform"]],
   ["windows-platform", ["cleanup-core"]],
   ["cleanup-core", []],
 ]);
@@ -74,6 +80,33 @@ const forbiddenCoreDependency = coreDependencies.find(
 
 if (forbiddenCoreDependency) {
   fail(`cleanup-core cannot depend on ${forbiddenCoreDependency}`);
+}
+
+for (const packageName of ["cleanup-core", "privileged-helper", "windows-platform"]) {
+  const dependency = packages
+    .get(packageName)
+    .dependencies.find(({ name }) => name === "tauri" || name.startsWith("tauri-"));
+  if (dependency) fail(`${packageName} cannot depend on ${dependency.name}`);
+}
+
+const rustRoots = [
+  resolve(root, "src-tauri/src"),
+  resolve(root, "src-tauri/crates"),
+];
+function rustFiles(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) return rustFiles(path);
+    return entry.name.endsWith(".rs") ? [path] : [];
+  });
+}
+for (const directory of rustRoots) {
+  for (const file of rustFiles(directory)) {
+    const source = readFileSync(file, "utf8");
+    if (/std::process::Command|Command::new/.test(source)) {
+      fail(`${relative(root, file)} contains forbidden runtime process execution`);
+    }
+  }
 }
 
 function sourceFiles(directory) {

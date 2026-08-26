@@ -1,9 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Allows the local main window to read foundation status.",
+  "description": "Allows only the local main webview to invoke approved application commands.",
   "local": true,
-  "windows": ["main"],
-  "permissions": ["allow-foundation-status"],
+  "webviews": ["main"],
+  "permissions": [
+    "allow-foundation-status",
+    "allow-create-system-restore-point"
+  ],
   "platforms": ["windows"]
 }

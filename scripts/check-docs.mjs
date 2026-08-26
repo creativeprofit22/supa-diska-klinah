@@ -4,6 +4,7 @@ const requiredDocuments = [
   "docs/architecture.md",
   "docs/development.md",
   "docs/parity.md",
+  "docs/security.md",
   "docs/licensing.md",
   "docs/adr/0001-modular-boundaries.md",
   "CONTRIBUTING.md",
@@ -20,4 +21,23 @@ if (missing.length) {
   process.exit(1);
 }
 
-console.log("README documentation links verified.");
+const security = readFileSync("docs/security.md", "utf8");
+const requiredSecuritySections = [
+  "## Scope and assets",
+  "## Trust boundaries",
+  "## Attacker model and assumptions",
+  "## Privileged-operation inventory",
+  "## Failure modes and recovery",
+  "## Residual risks",
+];
+const missingSecuritySections = requiredSecuritySections.filter(
+  (heading) => !security.includes(heading),
+);
+if (missingSecuritySections.length) {
+  console.error(
+    `Documentation check failed: security model lacks ${missingSecuritySections.join(", ")}`,
+  );
+  process.exit(1);
+}
+
+console.log("Threat model, privilege inventory, recovery, and README links verified.");

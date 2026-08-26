@@ -1,6 +1,9 @@
 #[cfg(not(target_os = "windows"))]
 compile_error!("windows-platform supports Windows targets only");
 
+pub mod privilege;
+pub mod security;
+
 pub use cleanup_core::FoundationStatus;
 
 pub fn foundation_status() -> FoundationStatus {

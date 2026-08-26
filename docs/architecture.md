@@ -4,11 +4,12 @@
 
 ```text
 React dashboard
-  -> typed @tauri-apps/api invoke("foundation_status")
-  -> Tauri commands::foundation
-  -> windows-platform::foundation_status
-  -> cleanup-core::FoundationStatus
-  -> serialized response to React
+  -> typed @tauri-apps/api invoke
+  -> capability-scoped Tauri command
+  -> windows-platform
+     -> ordinary adapter -> cleanup-core contracts
+     -> restore broker -> elevated one-shot helper -> System Restore
+  -> serialized, non-sensitive response to React
 ```
 
 The command layer delegates immediately. It does not contain platform operations or domain policy.
@@ -16,14 +17,15 @@ The command layer delegates immediately. It does not contain platform operations
 ## Rust dependency direction
 
 ```text
-supa-diska-klinah (thin Tauri app)
-  -> windows-platform (Windows adapter)
-    -> cleanup-core (portable contracts)
+supa-diska-klinah (thin Tauri app) -> windows-platform
+privileged-helper (one-shot elevated binary) -> windows-platform
+windows-platform (Windows adapter and security policy) -> cleanup-core
+cleanup-core (portable contracts)
 ```
 
-`cleanup-core` contains serializable domain types and contracts only. It cannot depend on Tauri, Windows bindings, filesystems, registries, services, or processes. `windows-platform` owns all future Windows filesystem, registry, service, process, elevation, and shell interaction. The application crate registers commands and capabilities but does not depend directly on `cleanup-core`.
+`cleanup-core` contains serializable domain types and contracts only. It cannot depend on Tauri, Windows bindings, filesystems, registries, services, or processes. `windows-platform` owns Windows operations, path policy, protocol validation, broker behavior, and helper dispatch. The application owns only Tauri registration and typed command input. The helper owns only process entry and fixed exit codes. Neither helper nor domain crate depends on Tauri.
 
-`scripts/check-architecture.mjs` reads locked Cargo metadata and rejects any other workspace edge. It also rejects Tauri or Windows dependencies in `cleanup-core`.
+`scripts/check-architecture.mjs` reads locked Cargo metadata and rejects any other workspace edge. It also rejects runtime `std::process::Command` and Tauri dependencies outside the application.
 
 ## Frontend ownership
 
@@ -43,12 +45,16 @@ The hash router keeps packaged navigation independent of an HTTP fallback. Route
 
 ## Tauri capability boundary
 
-The application exposes only `foundation_status`. `build.rs` declares that command to Tauri's app manifest. `capabilities/main.json` grants `allow-foundation-status` only to the local `main` window and only on Windows. No remote origins are accepted.
+The application exposes `foundation_status` and typed `create_system_restore_point`. `build.rs`, `generate_handler!`, and `capabilities/main.json` must contain the same command set. The capability targets only the local Windows `main` webview. No remote origins are accepted.
 
-Production and development content security policies are explicit. Asset protocol is disabled. There are no shell, filesystem, dialog, or updater plugins or capabilities. Adding a command requires all of the following:
+Production navigation allows only the packaged Tauri origin. Development additionally allows exactly `http://127.0.0.1:1420`. Content security policies are explicit, asset protocol is disabled, and no shell, filesystem, process, dialog, or updater plugin is granted. The main executable is `asInvoker` and rejects an elevated token before constructing Tauri. Only the separately packaged helper requests UAC.
+
+Adding a command requires all of the following:
 
 1. Put platform work behind `windows-platform`.
 2. Register the command in the app manifest and invoke handler.
 3. Add the narrowest main-window permission only when required.
 4. Validate all command input at the boundary and fail closed.
-5. Update architecture and parity checks where ownership changes.
+5. Run `pnpm check:security` to reject command-list or capability drift.
+6. Add a helper enum variant only when standard integrity cannot perform the operation.
+7. Update architecture, threat-model, and parity documents where ownership changes.

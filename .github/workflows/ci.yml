@@ -43,8 +43,14 @@ jobs:
       - name: Check architecture boundaries
         run: pnpm check:architecture
 
+      - name: Check Windows and Tauri security boundaries
+        run: pnpm check:security
+
       - name: Check documentation links
         run: pnpm check:docs
+
+      - name: Test frontend
+        run: pnpm test
 
       - name: Build frontend
         run: pnpm build

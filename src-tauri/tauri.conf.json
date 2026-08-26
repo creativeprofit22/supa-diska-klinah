@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.supadiskaklinah.app",
   "build": {
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build",
+    "beforeDevCommand": "pnpm build:helper && pnpm dev",
+    "beforeBuildCommand": "pnpm build:helper && pnpm build",
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist",
     "removeUnusedCommands": true
@@ -32,6 +32,7 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": false,
+    "externalBin": ["binaries/supa-diska-klinah-privileged-helper"]
   }
 }

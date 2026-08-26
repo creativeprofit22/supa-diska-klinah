@@ -16,9 +16,14 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "=2.6.3", features = [] }
 
 [dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
 tauri = { version = "=2.11.5", features = [] }
 windows-platform = { path = "crates/windows-platform" }
 
 [workspace]
-members = ["crates/cleanup-core", "crates/windows-platform"]
+members = [
+  "crates/cleanup-core",
+  "crates/privileged-helper",
+  "crates/windows-platform",
+]
 resolver = "2"

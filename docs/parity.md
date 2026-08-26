@@ -2,7 +2,7 @@
 
 This inventory maps Kudu v2.4.0 at commit `db09e051d0615121e659db187e3799438acbc9e6`. The source of record is [`src/main/ipc/index.ts`](https://github.com/AdventDevInc/kudu/blob/db09e051d0615121e659db187e3799438acbc9e6/src/main/ipc/index.ts). It is a planning contract, not evidence of behavioral parity.
 
-`Contract mapped` means ownership has a destination but no compatible command contract is implemented. `Not verified` means no Kudu-equivalence test has passed. The foundation-only `foundation_status` command is deliberately excluded from parity claims.
+`Contract mapped` means ownership has a destination but no complete compatible module contract is implemented. `Not verified` means no Kudu-equivalence test has passed. The foundation-only `foundation_status` command is deliberately excluded from parity claims. A narrow restore-point creation command now exists, but the broader Restore module remains contract-mapped and unverified until parity behavior is exercised.
 
 ## Registered module parity
 
@@ -57,6 +57,12 @@ These groups cover handlers implemented directly in Kudu's `index.ts` rather tha
 | Restore points | `index.ts:224-232` | `commands::restore` | `windows-platform::restore` | `features/restore` | Contract mapped | Not verified |
 | Scan, deletion, and cloud history | `index.ts:234-302` | `commands::history` | `windows-platform::history` | `features/history` | Contract mapped | Not verified |
 | Updater operations | `index.ts:304-308` | `commands::updater` | `windows-platform::updates` | `features/updates` | Contract mapped | Not verified |
+
+## Privilege classification
+
+The complete inventory is classified as standard-user, mixed, or helper-only in [`security.md`](security.md). Classification is not permission. Only restore-point creation is currently approved for the elevated helper. Kudu's whole-application elevation route is rejected; scanning and ordinary cleanup remain standard integrity.
+
+No privileged delete, arbitrary path, command, registry, service, or shell operation is implemented. Future destructive parity work requires opaque scan identifiers, Rust path resolution, containment revalidation, and quarantine or undo semantics.
 
 ## Updating this contract
 

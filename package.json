@@ -11,12 +11,19 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "check": "pnpm check:dependencies && pnpm check:parity && pnpm check:architecture && pnpm check:docs && pnpm build",
+    "test": "vitest run --pool=threads --maxWorkers=1",
+    "build:helper": "node scripts/build-privileged-helper.mjs",
+    "check": "pnpm check:dependencies && pnpm check:parity && pnpm check:architecture && pnpm check:security && pnpm check:docs && pnpm build",
     "check:architecture": "node scripts/check-architecture.mjs",
     "check:dependencies": "node scripts/check-dependencies.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:native-ci": "node scripts/check-native-ci.mjs",
     "check:parity": "node scripts/check-parity.mjs",
+    "check:security": "node scripts/check-security-boundaries.mjs",
+    "check:security:commands": "node scripts/check-security-boundaries.mjs commands",
+    "check:security:helper": "node scripts/check-security-boundaries.mjs helper",
+    "check:security:privilege": "node scripts/check-security-boundaries.mjs privilege",
+    "check:security:webview": "node scripts/check-security-boundaries.mjs webview",
     "test:native": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-native.ps1 -Target",
     "tauri": "tauri"
   },
@@ -28,10 +35,13 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.4",
+    "@testing-library/react": "16.3.2",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.1.0",
+    "jsdom": "30.0.1",
     "typescript": "6.0.3",
-    "vite": "8.2.2"
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
   }
 }
