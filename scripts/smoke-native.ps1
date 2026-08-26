@@ -1,13 +1,16 @@
 param(
   [Parameter(Mandatory = $true)]
   [ValidateSet("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc")]
-  [string]$Target
+  [string]$Target,
+  [string]$Directory
 )
 
 $ErrorActionPreference = "Stop"
-$directory = "src-tauri/target/$Target/debug"
-$exe = Resolve-Path "$directory/supa-diska-klinah.exe"
-$helper = "$directory/supa-diska-klinah-privileged-helper.exe"
+if (-not $Directory) {
+  $Directory = "src-tauri/target/$Target/debug"
+}
+$exe = Resolve-Path "$Directory/supa-diska-klinah.exe"
+$helper = "$Directory/supa-diska-klinah-privileged-helper.exe"
 if (-not (Test-Path -Path $helper -PathType Leaf)) {
   throw "Privileged helper is missing beside the $Target application."
 }
@@ -32,6 +35,9 @@ public static class ProcessTokenProbe
 
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
 
     [DllImport("user32.dll")]
     public static extern bool ShowWindowAsync(IntPtr window, int command);
@@ -58,17 +64,32 @@ public static class ProcessTokenProbe
         }
         finally { CloseHandle(token); }
     }
+
+    public static uint ExitCode(IntPtr process)
+    {
+        uint exitCode;
+        if (!GetExitCodeProcess(process, out exitCode))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        return exitCode;
+    }
 }
 "@
 
 $env:SUPA_DISKA_KLINAH_SMOKE_MINIMIZED = "1"
-$process = Start-Process -FilePath $exe -WindowStyle Minimized -PassThru
+$stdoutPath = [IO.Path]::GetTempFileName()
+$stderrPath = [IO.Path]::GetTempFileName()
+$process = $null
 try {
+  $process = Start-Process -FilePath $exe -WindowStyle Minimized -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+  $processHandle = $process.Handle
   $windowSeen = $false
   for ($attempt = 0; $attempt -lt 80; $attempt++) {
     $process.Refresh()
     if ($process.HasExited) {
-      throw "Native executable exited during the smoke window with code $($process.ExitCode)."
+      $exitCode = [ProcessTokenProbe]::ExitCode($processHandle)
+      $stdout = Get-Content -Path $stdoutPath -Raw
+      $stderr = Get-Content -Path $stderrPath -Raw
+      throw "Native executable exited during the smoke window with code $exitCode.`nstdout:`n$stdout`nstderr:`n$stderr"
     }
     if ($process.MainWindowHandle -ne [IntPtr]::Zero) {
       $windowSeen = $true
@@ -92,8 +113,12 @@ try {
   Write-Output "$Target native executable remained non-visible at standard integrity with its helper present."
 }
 finally {
-  $process.Refresh()
-  if (-not $process.HasExited) {
-    Stop-Process -Id $process.Id
+  if ($process) {
+    $process.Refresh()
+    if (-not $process.HasExited) {
+      Stop-Process -Id $process.Id -PassThru | Wait-Process
+    }
+    $process.Dispose()
   }
+  Remove-Item -Path $stdoutPath, $stderrPath -Force
 }
