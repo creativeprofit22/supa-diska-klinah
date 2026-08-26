@@ -112,6 +112,8 @@ if (
     ciWorkflow,
   ) ||
   !/New-LocalUser -Name \$username -Password \$securePassword/.test(nativeSmokeCi) ||
+  !/icacls\.exe \$smokeTempPath \/grant/.test(nativeSmokeCi) ||
+  !/`\$env:TEMP =/.test(nativeSmokeCi) ||
   !/-Credential \$credential -LoadUserProfile/.test(nativeSmokeCi) ||
   !/Remove-LocalUser -Name \$username/.test(nativeSmokeCi)
 ) {
