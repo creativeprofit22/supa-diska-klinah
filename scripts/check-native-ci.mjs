@@ -30,7 +30,10 @@ if (run.status !== "completed" || run.conclusion !== "success") {
 for (const architecture of ["x64", "ARM64"]) {
   const job = run.jobs.find(({ name }) => name === `Native smoke (${architecture})`);
   if (!job || job.conclusion !== "success") fail(`${architecture} native job did not pass`);
-  for (const stepName of ["Build native debug executable", "Launch native executable"]) {
+  for (const stepName of [
+    "Build native debug executable",
+    "Launch native executable as standard user",
+  ]) {
     const step = job.steps.find(({ name }) => name === stepName);
     if (!step || step.conclusion !== "success") fail(`${architecture} ${stepName} did not pass`);
   }
