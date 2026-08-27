@@ -70,7 +70,7 @@ Observed result: cancellation was reported; process `11600` stayed unique and un
 
 ## Current execution record — 2026-08-27
 
-Status: **BLOCKED — one successful local restore-point run remains.**
+Status: **PASSED — successful local restore-point and UAC-cancellation runs are recorded.**
 
 Candidate source commit: `58fed9f878add193af02292cbe13d18a9984b0ab` with documented uncommitted prerequisite changes.
 
@@ -148,3 +148,5 @@ The minimized candidate received one approved UAC prompt and reported sequence `
 `Get-ComputerRestorePoint` remained unavailable to the standard-integrity inspection session. No additional elevation was requested.
 
 Automated gate command ID `b988b32f-7978-4548-baa2-2eacc41daf9b` exited `0`: project checks, 11 frontend tests, Rust formatting, Clippy, 34 workspace tests, and the minimized x64 native smoke passed.
+
+Corroboration command ID `a73776b5-8266-460a-9c4a-a8b590ded33f` read System Restore `LastIndex` and counted remaining app/helper processes from standard integrity. It exited `0`: `LastIndex=138` and `MatchingProcesses=0`.
