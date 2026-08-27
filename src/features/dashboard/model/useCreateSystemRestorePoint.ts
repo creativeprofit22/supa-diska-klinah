@@ -13,16 +13,32 @@ interface CreateSystemRestorePointState {
 }
 
 function restorePointErrorMessage(reason: unknown): string {
-  if (
+  const code =
     typeof reason === "object" &&
     reason !== null &&
     "code" in reason &&
-    reason.code === "invalidInput"
-  ) {
-    return "Enter a valid restore point description.";
-  }
+    typeof reason.code === "string"
+      ? reason.code
+      : "";
 
-  return "Windows did not complete the restore point. This app is still open.";
+  switch (code) {
+    case "invalidInput":
+      return "Enter a valid restore point description.";
+    case "authorizationCancelled":
+      return "Administrator approval was cancelled. Try again and approve the Windows prompt.";
+    case "helperUnavailable":
+      return "The privileged helper is unavailable. Repair or reinstall the app, then try again.";
+    case "operationTimedOut":
+      return "System Restore timed out. Check Windows System Protection, then try again.";
+    case "invalidRequest":
+      return "The restore point request expired or was rejected. Try again.";
+    case "privilegeFailure":
+      return "Administrator access was not granted. Try again and approve the Windows prompt.";
+    case "systemRestoreFailure":
+      return "Windows System Restore failed. Check System Protection and available disk space.";
+    default:
+      return "Windows did not complete the restore point. This app is still open.";
+  }
 }
 
 export function useCreateSystemRestorePoint(): CreateSystemRestorePointState {

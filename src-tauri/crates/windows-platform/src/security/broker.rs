@@ -29,39 +29,47 @@ const SOCKET_TIMEOUT: Duration = Duration::from_secs(120);
 const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(90);
 const HELPER_FILENAME: &str = "supa-diska-klinah-privileged-helper.exe";
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrokerError {
-    Io(io::Error),
-    InvalidHelper,
-    AuthorizationDenied,
-    Protocol,
-    Helper(HelperErrorCode),
+    AuthorizationCancelled,
+    HelperUnavailable,
+    Timeout,
+    InvalidRequest,
+    PrivilegeFailure,
+    SystemRestoreFailure,
 }
 
 impl fmt::Display for BrokerError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Io(_) => "privileged helper I/O failed",
-            Self::InvalidHelper => "privileged helper validation failed",
-            Self::AuthorizationDenied => "administrator authorization was cancelled or denied",
-            Self::Protocol => "privileged helper returned an invalid response",
-            Self::Helper(_) => "privileged helper operation failed",
+            Self::AuthorizationCancelled => "administrator authorization was cancelled or denied",
+            Self::HelperUnavailable => "privileged helper is unavailable",
+            Self::Timeout => "privileged helper timed out",
+            Self::InvalidRequest => "privileged request was invalid or stale",
+            Self::PrivilegeFailure => "privileged helper was not elevated",
+            Self::SystemRestoreFailure => "Windows System Restore failed",
         })
     }
 }
 
-impl std::error::Error for BrokerError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            _ => None,
+impl std::error::Error for BrokerError {}
+
+impl From<io::Error> for BrokerError {
+    fn from(error: io::Error) -> Self {
+        match error.kind() {
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => Self::Timeout,
+            _ => Self::HelperUnavailable,
         }
     }
 }
 
-impl From<io::Error> for BrokerError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
+impl From<HelperErrorCode> for BrokerError {
+    fn from(code: HelperErrorCode) -> Self {
+        match code {
+            HelperErrorCode::InvalidRequest => Self::InvalidRequest,
+            HelperErrorCode::PrivilegeFailure => Self::PrivilegeFailure,
+            HelperErrorCode::SystemRestoreFailure => Self::SystemRestoreFailure,
+        }
     }
 }
 
@@ -99,9 +107,9 @@ pub fn create_system_restore_point(
 
 fn helper_path() -> Result<ValidatedExecutable, BrokerError> {
     let executable = std::env::current_exe()?;
-    let directory = executable.parent().ok_or(BrokerError::InvalidHelper)?;
+    let directory = executable.parent().ok_or(BrokerError::HelperUnavailable)?;
     validate_executable(directory, &directory.join(HELPER_FILENAME))
-        .map_err(|_| BrokerError::InvalidHelper)
+        .map_err(|_| BrokerError::HelperUnavailable)
 }
 
 fn launch_elevated(
@@ -124,16 +132,20 @@ fn launch_elevated(
     // SAFETY: execute and its NUL-terminated strings remain alive for this synchronous call.
     if unsafe { ShellExecuteExW(&mut execute) } == 0 {
         let error = io::Error::last_os_error();
-        return if matches!(error.raw_os_error(), Some(5 | 1223)) {
-            Err(BrokerError::AuthorizationDenied)
-        } else {
-            Err(BrokerError::Io(error))
-        };
+        return Err(map_launch_error(error));
     }
     if execute.hProcess.is_null() {
-        Err(BrokerError::Protocol)
+        Err(BrokerError::HelperUnavailable)
     } else {
         Ok(ProcessHandle(execute.hProcess))
+    }
+}
+
+fn map_launch_error(error: io::Error) -> BrokerError {
+    if matches!(error.raw_os_error(), Some(5 | 1223)) {
+        BrokerError::AuthorizationCancelled
+    } else {
+        error.into()
     }
 }
 
@@ -159,16 +171,13 @@ fn exchange_once(
                 thread::sleep(Duration::from_millis(25));
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                return Err(BrokerError::Io(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "privileged helper handshake timed out",
-                )));
+                return Err(BrokerError::Timeout);
             }
-            Err(error) => return Err(BrokerError::Io(error)),
+            Err(error) => return Err(error.into()),
         }
     };
     if !matches!(peer, SocketAddr::V4(address) if address.ip().is_loopback()) {
-        return Err(BrokerError::Protocol);
+        return Err(BrokerError::HelperUnavailable);
     }
     configure_stream(&stream)?;
     let mut supplied_token = Zeroizing::new([0; TOKEN_BYTES]);
@@ -176,17 +185,17 @@ fn exchange_once(
     stream.read_exact(supplied_token.as_mut())?;
     let authenticated = tokens_match(expected_token, &supplied_token);
     if !authenticated {
-        return Err(BrokerError::Protocol);
+        return Err(BrokerError::HelperUnavailable);
     }
 
     write_json_frame(&mut stream, request)?;
     let response: ResponseEnvelope = read_json_frame(&mut stream)?;
     response
         .validate_for(&request.request_id)
-        .map_err(|_| BrokerError::Protocol)?;
+        .map_err(|_| BrokerError::HelperUnavailable)?;
     match response.response {
         PrivilegedResponse::Success { result } => Ok(result),
-        PrivilegedResponse::Error { code } => Err(BrokerError::Helper(code)),
+        PrivilegedResponse::Error { code } => Err(code.into()),
     }
 }
 
@@ -289,8 +298,36 @@ mod tests {
     fn wrong_token_is_rejected_before_the_request_is_sent() {
         assert!(matches!(
             integration_exchange([8; TOKEN_BYTES]),
-            Err(BrokerError::Protocol)
+            Err(BrokerError::HelperUnavailable)
         ));
+    }
+
+    #[test]
+    fn broker_maps_failures_to_bounded_non_sensitive_codes() {
+        assert_eq!(
+            map_launch_error(io::Error::from_raw_os_error(1223)),
+            BrokerError::AuthorizationCancelled
+        );
+        assert_eq!(
+            BrokerError::from(io::Error::new(io::ErrorKind::TimedOut, "OS detail")),
+            BrokerError::Timeout
+        );
+        assert_eq!(
+            BrokerError::from(io::Error::other("OS detail")),
+            BrokerError::HelperUnavailable
+        );
+        assert_eq!(
+            BrokerError::from(HelperErrorCode::InvalidRequest),
+            BrokerError::InvalidRequest
+        );
+        assert_eq!(
+            BrokerError::from(HelperErrorCode::PrivilegeFailure),
+            BrokerError::PrivilegeFailure
+        );
+        assert_eq!(
+            BrokerError::from(HelperErrorCode::SystemRestoreFailure),
+            BrokerError::SystemRestoreFailure
+        );
     }
 
     #[test]

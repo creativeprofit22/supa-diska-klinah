@@ -32,7 +32,15 @@
     }
   },
   "bundle": {
-    "active": false,
-    "externalBin": ["binaries/supa-diska-klinah-privileged-helper"]
+    "active": true,
+    "targets": ["nsis"],
+    "externalBin": ["binaries/supa-diska-klinah-privileged-helper"],
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    }
   }
 }

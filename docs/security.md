@@ -15,7 +15,7 @@ The normal Tauri process runs at standard integrity. Its manifest requests `asIn
 | Standard app to elevated helper | The helper exposes one operation enum, authenticates one loopback connection, enforces request freshness, then exits. |
 | Loopback transport | The app binds `127.0.0.1` first, uses a random 256-bit token and independent request ID, caps frames at 4 KiB, applies 120-second socket timeouts, and permits 60-second authorizations within a 90-second handshake deadline. Tokens are compared without early exit and are not logged. |
 | Filesystem containment | Rust rejects relative paths, lexical `..`, root equality, sibling-prefix confusion, missing paths, and every reparse-point component before and after canonicalization. |
-| Installed helper | The broker resolves one exact filename beside the current executable, requires a regular contained non-reparse file, and never searches `PATH`. The protected installation directory and configured code signing remain deployment assumptions. |
+| Installed helper | The broker resolves one exact filename beside the current executable, requires a regular contained non-reparse file, and never searches `PATH`. Protected installation and code signing remain deployment responsibilities. |
 | Windows elevation | Only Windows UAC and the separately manifested helper cross into high integrity. The helper checks its own process token before dispatch. |
 | System Restore | `SrClient.dll` loads only from System32. COM security is initialized for required local service identities, descriptions are bounded, and begin/end calls are paired. |
 
@@ -49,12 +49,18 @@ Direct Kudu handlers are classified as follows: platform information and onboard
 
 UAC cancellation or denial, disabled System Restore, safe mode, COM initialization failure, low disk space, Windows timeout, missing or replaced helper, malformed or stale messages, wrong tokens, helper loss, and non-loopback peers all fail closed. The standard app remains running and is never relaunched elevated.
 
-The helper reports only fixed error classes. Command callers receive a non-sensitive failure message. Authentication tokens, command payloads, restore-point descriptions, paths, raw Windows errors, and system details must not enter production logs. A failed request may be retried after checking Windows System Protection and available disk space. If Windows accepts the begin call but the end call fails, inspect System Protection before retrying; do not assume the partial restore point is usable.
+The helper and command boundaries expose only fixed, non-sensitive error codes: `authorizationCancelled`, `helperUnavailable`, `operationTimedOut`, `invalidRequest`, `privilegeFailure`, and `systemRestoreFailure`. Local description validation additionally returns `invalidInput`. Raw Windows, COM, protocol, token, path, and system details never cross into the webview or production logs.
 
-A manual restore-point exercise may be run on a disposable Windows machine with System Protection enabled. It should confirm one UAC prompt, a returned sequence number, and a visible completed restore point. CI never invokes `SRSetRestorePointW`, and automated test results must not be represented as manual Windows verification.
+Callers should retry cancelled authorization only after approving UAC; repair or reinstall an unavailable helper; retry expired requests; and check Windows System Protection plus available disk space after timeout or System Restore failure. A privilege failure means the helper launched without required elevation. If Windows accepts the begin call but the end call fails, inspect System Protection before retrying; do not assume the partial restore point is usable.
+
+The Windows 10 x64 alpha follows the [release checklist](release-checklist.md). It requires the hardened automated gates, one successful local restore-point run, and one local UAC-cancellation run. Both manual runs confirm the original app remains unique and unelevated. CI never invokes `SRSetRestorePointW`, and automated results must not be represented as manual Windows verification.
+
+## Future release checks
+
+Windows 11, ARM64, code signing, disposable-machine installation, and disabled-System-Restore behavior are non-blocking for the alpha. They must be reconsidered before broad Windows distribution.
 
 ## Residual risks
 
-Loopback authentication does not isolate a compromised standard app from its own approved operation. Filesystem validation reduces link and containment mistakes but future destructive operations still need operation-boundary revalidation against races. Installation ACLs, code-signing verification, Windows restore-point policy, and backup quality remain outside this code boundary.
+Loopback authentication does not isolate a compromised standard app from its own approved operation. Filesystem validation reduces link and containment mistakes, but future destructive operations still need operation-boundary race checks. Installation ACLs, certificate custody, Windows restore-point policy, and backup quality remain operational responsibilities.
 
 MangoDisk informed containment behavior only. No GPL implementation or test code was copied; licensing details remain in `docs/licensing.md`.

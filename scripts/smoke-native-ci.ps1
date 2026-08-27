@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
   [ValidateSet("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc")]
-  [string]$Target
+  [string]$Target,
+  [string]$Directory
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,6 +29,7 @@ try {
   $profilePath = Join-Path $env:SystemDrive "Users\$username"
   $script = Join-Path $PSScriptRoot "smoke-native.ps1"
   $commandPath = Join-Path $smokeTempPath "run-smoke.ps1"
+  $directoryArgument = if ($Directory) { " -Directory '$($Directory.Replace("'", "''"))'" } else { "" }
   @"
 `$env:USERPROFILE = '$profilePath'
 `$env:HOME = `$env:USERPROFILE
@@ -37,7 +39,7 @@ try {
 `$env:APPDATA = '$profilePath\AppData\Roaming'
 `$env:TEMP = '$($smokeTempPath.Replace("'", "''"))'
 `$env:TMP = `$env:TEMP
-& '$($script.Replace("'", "''"))' -Target '$Target'
+& '$($script.Replace("'", "''"))' -Target '$Target'$directoryArgument
 "@ | Set-Content -Path $commandPath -Encoding UTF8
 
   $shell = (Get-Process -Id $PID).Path
@@ -45,7 +47,9 @@ try {
 
   [Console]::Out.Write((Get-Content -Path $stdoutPath -Raw))
   [Console]::Error.Write((Get-Content -Path $stderrPath -Raw))
-  exit $process.ExitCode
+  if ($process.ExitCode -ne 0) {
+    throw "The standard-user smoke process exited with code $($process.ExitCode)."
+  }
 }
 finally {
   if ($userCreated) {

@@ -116,3 +116,55 @@ jobs:
       - name: Launch native executable as standard user
         shell: pwsh
         run: ./scripts/smoke-native-ci.ps1 -Target ${{ matrix.target }}
+
+  windows-release:
+    name: Signed Windows release
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: quality
+    environment: windows-release
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        # actions/checkout v4.2.2
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Set up Node.js
+        # actions/setup-node v4.4.0
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+        working-directory: src-tauri
+
+      - name: Import protected code-signing certificate
+        shell: pwsh
+        run: ./scripts/prepare-windows-signing.ps1
+        env:
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+
+      - name: Build signed per-machine NSIS bundle
+        shell: pwsh
+        run: pnpm tauri build --ci --target x86_64-pc-windows-msvc --bundles nsis --config $env:TAURI_RELEASE_CONFIG
+
+      - name: Verify signed installed release
+        shell: pwsh
+        run: ./scripts/verify-windows-release.ps1
+
+      - name: Remove imported signing certificate
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:TAURI_WINDOWS_CERTIFICATE_THUMBPRINT) {
+            Remove-Item "Cert:\CurrentUser\My\$env:TAURI_WINDOWS_CERTIFICATE_THUMBPRINT" -Force -ErrorAction SilentlyContinue
+          }

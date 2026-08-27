@@ -82,8 +82,8 @@ pub enum PrivilegedResponse {
 #[serde(rename_all = "camelCase")]
 pub enum HelperErrorCode {
     InvalidRequest,
-    NotElevated,
-    OperationFailed,
+    PrivilegeFailure,
+    SystemRestoreFailure,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -240,22 +240,24 @@ mod tests {
     }
 
     #[test]
-    fn framing_round_trips_a_response() {
-        let response = ResponseEnvelope {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: "11".repeat(REQUEST_ID_BYTES),
-            response: PrivilegedResponse::Success {
-                result: CreateSystemRestorePointResult {
-                    sequence_number: 42,
-                },
-            },
-        };
-        let mut bytes = Vec::new();
-        write_json_frame(&mut bytes, &response).unwrap();
-        assert_eq!(
-            read_json_frame::<ResponseEnvelope>(Cursor::new(bytes)).unwrap(),
-            response
-        );
+    fn framing_round_trips_response_error_codes() {
+        for code in [
+            HelperErrorCode::InvalidRequest,
+            HelperErrorCode::PrivilegeFailure,
+            HelperErrorCode::SystemRestoreFailure,
+        ] {
+            let response = ResponseEnvelope {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "11".repeat(REQUEST_ID_BYTES),
+                response: PrivilegedResponse::Error { code },
+            };
+            let mut bytes = Vec::new();
+            write_json_frame(&mut bytes, &response).unwrap();
+            assert_eq!(
+                read_json_frame::<ResponseEnvelope>(Cursor::new(bytes)).unwrap(),
+                response
+            );
+        }
     }
 
     #[test]

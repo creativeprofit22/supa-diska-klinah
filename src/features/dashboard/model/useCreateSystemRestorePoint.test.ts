@@ -37,8 +37,33 @@ describe("useCreateSystemRestorePoint", () => {
     expect(result.current.error).toBeNull();
   });
 
-  it("keeps native failures non-sensitive and recoverable", async () => {
-    createSystemRestorePoint.mockRejectedValue({ code: "operationUnavailable" });
+  it.each([
+    [
+      "authorizationCancelled",
+      "Administrator approval was cancelled. Try again and approve the Windows prompt.",
+    ],
+    [
+      "helperUnavailable",
+      "The privileged helper is unavailable. Repair or reinstall the app, then try again.",
+    ],
+    [
+      "operationTimedOut",
+      "System Restore timed out. Check Windows System Protection, then try again.",
+    ],
+    [
+      "invalidRequest",
+      "The restore point request expired or was rejected. Try again.",
+    ],
+    [
+      "privilegeFailure",
+      "Administrator access was not granted. Try again and approve the Windows prompt.",
+    ],
+    [
+      "systemRestoreFailure",
+      "Windows System Restore failed. Check System Protection and available disk space.",
+    ],
+  ])("provides recovery guidance for %s", async (code, message) => {
+    createSystemRestorePoint.mockRejectedValue({ code });
     const { result } = renderHook(() => useCreateSystemRestorePoint());
 
     await act(async () => {
@@ -47,8 +72,6 @@ describe("useCreateSystemRestorePoint", () => {
 
     expect(result.current.loading).toBe(false);
     expect(result.current.result).toBeNull();
-    expect(result.current.error).toBe(
-      "Windows did not complete the restore point. This app is still open.",
-    );
+    expect(result.current.error).toBe(message);
   });
 });

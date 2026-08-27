@@ -94,6 +94,18 @@ fn create_restore_point(description: &RestorePointDescription) -> Result<i64, Re
     let _com = ComInitialization::initialize()?;
     let library = DynamicLibrary::system32("SrClient.dll")?;
     let set_restore_point: SetRestorePoint = library.function(b"SRSetRestorePointW\0")?;
+    sequence_restore_point(description, |info, status| {
+        call_restore_point(set_restore_point, info, status)
+    })
+}
+
+fn sequence_restore_point(
+    description: &RestorePointDescription,
+    mut set_restore_point: impl FnMut(
+        &mut RestorePointInfo,
+        &mut StateManagerStatus,
+    ) -> Result<(), RestorePointError>,
+) -> Result<i64, RestorePointError> {
     let mut encoded_description = [0; MAX_DESC_W];
     for (destination, unit) in encoded_description
         .iter_mut()
@@ -108,13 +120,13 @@ fn create_restore_point(description: &RestorePointDescription) -> Result<i64, Re
         description: encoded_description,
     };
     let mut status = StateManagerStatus::default();
-    call_restore_point(set_restore_point, &mut info, &mut status)?;
+    set_restore_point(&mut info, &mut status)?;
     let sequence_number = status.sequence_number;
 
     info.event_type = END_SYSTEM_CHANGE;
     info.sequence_number = sequence_number;
     status = StateManagerStatus::default();
-    call_restore_point(set_restore_point, &mut info, &mut status)?;
+    set_restore_point(&mut info, &mut status)?;
     Ok(sequence_number)
 }
 
@@ -298,18 +310,57 @@ const _: () = assert!(size_of::<StateManagerStatus>() == 12);
 mod tests {
     use super::*;
 
-    struct FakeBackend;
-
-    impl RestorePointBackend for FakeBackend {
-        fn create(&self, description: &RestorePointDescription) -> Result<i64, RestorePointError> {
-            assert_eq!(description.as_str(), "Before cleanup");
-            Ok(123)
-        }
+    fn description() -> RestorePointDescription {
+        RestorePointDescription::parse("Before cleanup".into()).unwrap()
     }
 
     #[test]
-    fn backend_trait_replaces_only_the_irreversible_windows_call() {
-        let description = RestorePointDescription::parse("Before cleanup".into()).unwrap();
-        assert_eq!(FakeBackend.create(&description).unwrap(), 123);
+    fn begin_precedes_end_and_its_sequence_is_returned_and_propagated() {
+        let mut calls = Vec::new();
+        let sequence_number = sequence_restore_point(&description(), |info, status| {
+            calls.push((info.event_type, info.sequence_number));
+            if info.event_type == BEGIN_SYSTEM_CHANGE {
+                status.sequence_number = 123;
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(sequence_number, 123);
+        assert_eq!(
+            calls,
+            vec![(BEGIN_SYSTEM_CHANGE, 0), (END_SYSTEM_CHANGE, 123)]
+        );
+    }
+
+    #[test]
+    fn begin_failure_prevents_end_call() {
+        let mut calls = Vec::new();
+        let error = sequence_restore_point(&description(), |info, _| {
+            calls.push(info.event_type);
+            Err(RestorePointError::Status(5))
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, RestorePointError::Status(5)));
+        assert_eq!(calls, vec![BEGIN_SYSTEM_CHANGE]);
+    }
+
+    #[test]
+    fn end_failure_is_propagated() {
+        let mut calls = Vec::new();
+        let error = sequence_restore_point(&description(), |info, status| {
+            calls.push(info.event_type);
+            if info.event_type == BEGIN_SYSTEM_CHANGE {
+                status.sequence_number = 123;
+                Ok(())
+            } else {
+                Err(RestorePointError::Status(6))
+            }
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, RestorePointError::Status(6)));
+        assert_eq!(calls, vec![BEGIN_SYSTEM_CHANGE, END_SYSTEM_CHANGE]);
     }
 }

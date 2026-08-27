@@ -94,7 +94,7 @@ pub fn dispatch(
         .map_err(|_| HelperErrorCode::InvalidRequest)
         .and_then(|()| match privilege.is_elevated() {
             Ok(true) => Ok(()),
-            _ => Err(HelperErrorCode::NotElevated),
+            _ => Err(HelperErrorCode::PrivilegeFailure),
         })
         .and_then(|()| match request.operation {
             PrivilegedOperation::CreateSystemRestorePoint { description } => {
@@ -103,7 +103,7 @@ pub fn dispatch(
                 backend
                     .create(&description)
                     .map(|sequence_number| CreateSystemRestorePointResult { sequence_number })
-                    .map_err(|_| HelperErrorCode::OperationFailed)
+                    .map_err(map_restore_point_error)
             }
         }) {
         Ok(result) => PrivilegedResponse::Success { result },
@@ -114,6 +114,10 @@ pub fn dispatch(
         request_id,
         response,
     }
+}
+
+fn map_restore_point_error(_: super::restore_point::RestorePointError) -> HelperErrorCode {
+    HelperErrorCode::SystemRestoreFailure
 }
 
 fn error_response(request_id: &str, code: HelperErrorCode) -> ResponseEnvelope {
@@ -186,9 +190,24 @@ mod tests {
         assert!(matches!(
             response.response,
             PrivilegedResponse::Error {
-                code: HelperErrorCode::NotElevated
+                code: HelperErrorCode::PrivilegeFailure
             }
         ));
+    }
+
+    #[test]
+    fn restore_point_backend_failures_use_one_non_sensitive_code() {
+        for error in [
+            RestorePointError::Windows(io::Error::other("sensitive OS detail")),
+            RestorePointError::Com(-1),
+            RestorePointError::Status(5),
+            RestorePointError::MissingEntryPoint,
+        ] {
+            assert_eq!(
+                map_restore_point_error(error),
+                HelperErrorCode::SystemRestoreFailure
+            );
+        }
     }
 
     #[test]

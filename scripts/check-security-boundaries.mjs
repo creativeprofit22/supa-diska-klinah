@@ -22,6 +22,8 @@ const helperSource = read("src-tauri/crates/windows-platform/src/security/helper
 const protocolSource = read("src-tauri/crates/windows-platform/src/security/protocol.rs");
 const ciWorkflow = read(".github/workflows/ci.yml");
 const nativeSmokeCi = read("scripts/smoke-native-ci.ps1");
+const releaseSigning = read("scripts/prepare-windows-signing.ps1");
+const releaseVerification = read("scripts/verify-windows-release.ps1");
 const focus = process.argv[2] ?? "all";
 const focusMessages = {
   all: "Windows and Tauri security boundaries verified.",
@@ -87,6 +89,16 @@ if (
 if (tauriConfig.bundle.externalBin?.length !== 1) {
   fail("exactly one reviewed privileged helper sidecar must be bundled");
 }
+if (
+  tauriConfig.bundle.active !== true ||
+  JSON.stringify(tauriConfig.bundle.targets) !== JSON.stringify(["nsis"]) ||
+  tauriConfig.bundle.windows?.digestAlgorithm !== "sha256" ||
+  !tauriConfig.bundle.windows?.timestampUrl ||
+  tauriConfig.bundle.windows?.certificateThumbprint ||
+  tauriConfig.bundle.windows?.nsis?.installMode !== "perMachine"
+) {
+  fail("production bundles must be timestamped per-machine NSIS installers with external signing");
+}
 
 if (!/requestedExecutionLevel\s+level="asInvoker"\s+uiAccess="false"/.test(appManifest)) {
   fail("main manifest must explicitly request asInvoker");
@@ -126,6 +138,21 @@ if (
 }
 if (cargoFiles.some((cargo) => /tauri-plugin-(?:shell|fs)/.test(cargo))) {
   fail("generic shell and filesystem plugins are forbidden");
+}
+const releaseJob = ciWorkflow.slice(ciWorkflow.indexOf("  windows-release:"));
+if (
+  !/environment: windows-release/.test(releaseJob) ||
+  !/secrets\.WINDOWS_CODESIGN_PFX_BASE64/.test(releaseJob) ||
+  !/secrets\.WINDOWS_CODESIGN_PFX_PASSWORD/.test(releaseJob) ||
+  !/tauri build --ci --target x86_64-pc-windows-msvc --bundles nsis/.test(releaseJob) ||
+  /--debug|--no-bundle/.test(releaseJob) ||
+  !/verify-windows-release\.ps1/.test(releaseJob) ||
+  !/Import-PfxCertificate/.test(releaseSigning) ||
+  !/Get-AuthenticodeSignature/.test(releaseVerification) ||
+  !/Get-Acl/.test(releaseVerification) ||
+  !/smoke-native-ci\.ps1/.test(releaseVerification)
+) {
+  fail("release CI must externally sign and verify the installed protected helper flow");
 }
 
 if (
