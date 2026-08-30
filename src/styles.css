@@ -479,6 +479,102 @@ h2 {
   font-size: 0.875rem;
 }
 
+.cleanup-selection {
+  display: flex;
+  align-items: start;
+  gap: 0.75rem;
+  cursor: pointer;
+}
+
+.cleanup-selection input {
+  width: 1.2rem;
+  height: 1.2rem;
+  margin-block-start: 0.15rem;
+  accent-color: var(--accent);
+}
+
+.cleanup-selection small {
+  display: block;
+  margin-block-start: 0.3rem;
+  color: var(--muted);
+}
+
+.cleanup-actions,
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  max-width: 52rem;
+  margin-block-start: 1rem;
+}
+
+.danger-button {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+dialog {
+  width: min(32rem, calc(100% - 2rem));
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 45%);
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 65%);
+}
+
+.error-text {
+  color: var(--danger);
+}
+
+.cleanup-outcomes,
+.cleanup-history {
+  max-width: 52rem;
+  margin-block-start: 1.5rem;
+}
+
+.cleanup-outcomes ul,
+.cleanup-history ul {
+  padding: 0;
+  list-style: none;
+}
+
+.cleanup-outcomes li,
+.cleanup-history li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 0.65rem;
+  border-block-end: 1px solid var(--border);
+}
+
+.cleanup-accounting {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.75rem;
+}
+
+.cleanup-accounting div {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.cleanup-accounting dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.cleanup-accounting dd {
+  margin: 0.25rem 0 0;
+  font-weight: 700;
+}
+
+
 @media (max-width: 42.5rem) {
   .app-shell {
     display: block;
