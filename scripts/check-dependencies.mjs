@@ -32,8 +32,12 @@ const cargo = readFileSync("src-tauri/Cargo.toml", "utf8");
 for (const required of ['version = "=2.11.5"', 'version = "=2.6.3"']) {
   if (!cargo.includes(required)) fail(`missing Cargo pin: ${required}`);
 }
-if (!readFileSync("src-tauri/crates/cleanup-core/Cargo.toml", "utf8").includes('version = "=1.0.229"')) {
+const cleanupCoreCargo = readFileSync("src-tauri/crates/cleanup-core/Cargo.toml", "utf8");
+if (!cleanupCoreCargo.includes('version = "=1.0.229"')) {
   fail("Serde must remain pinned to 1.0.229");
+}
+if (!cleanupCoreCargo.includes('serde_json = "=1.0.151"')) {
+  fail("cleanup-core serde_json must remain pinned to 1.0.151");
 }
 
 const workflow = readFileSync(".github/workflows/ci.yml", "utf8");

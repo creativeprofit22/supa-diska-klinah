@@ -32,6 +32,8 @@ Future deletion APIs must be implemented in `windows-platform` and must:
 
 These constraints describe required behavior, not an implementation copied from MangoDisk.
 
+`cleanup-core` owns strict versioned rule parsing, protection decisions, bounded scanner modules, cancellation, progress, candidate measurement, deterministic deduplication, and preview snapshots. Its object-safe filesystem contract exposes only no-follow metadata, canonical paths, directory entries, path semantics, and stable identities. `windows-platform` implements those facts and classifies every Windows reparse-point attribute as link-like. Preview IDs are opaque and privately resolve to paths; no deletion or Tauri command is part of this decision.
+
 ## Rejected alternatives
 
 - **Commands operating directly on Windows:** rejected because UI exposure, platform work, and domain contracts become inseparable.

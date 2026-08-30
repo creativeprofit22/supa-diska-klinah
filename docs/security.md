@@ -15,6 +15,7 @@ The normal Tauri process runs at standard integrity. Its manifest requests `asIn
 | Standard app to elevated helper | The helper exposes one operation enum, authenticates one loopback connection, enforces request freshness, then exits. |
 | Loopback transport | The app binds `127.0.0.1` first, uses a random 256-bit token and independent request ID, caps frames at 4 KiB, applies 120-second socket timeouts, and permits 60-second authorizations within a 90-second handshake deadline. Tokens are compared without early exit and are not logged. |
 | Filesystem containment | Rust rejects relative paths, lexical `..`, root equality, sibling-prefix confusion, missing paths, and every reparse-point component before and after canonicalization. |
+| Cleanup preview | Strict size-capped rules, caller-resolved roots, compiled system/user/configured protections, repository metadata exclusions, no-follow traversal, stable identities, cancellation, bounded work, and before/after measurement checks fail closed. Paths are represented externally by opaque random IDs. |
 | Installed helper | The broker resolves one exact filename beside the current executable, requires a regular contained non-reparse file, and never searches `PATH`. Protected installation and code signing remain deployment responsibilities. |
 | Windows elevation | Only Windows UAC and the separately manifested helper cross into high integrity. The helper checks its own process token before dispatch. |
 | System Restore | `SrClient.dll` loads only from System32. COM security is initialized for required local service identities, descriptions are bounded, and begin/end calls are paired. |
@@ -61,6 +62,6 @@ Windows 11, ARM64, code signing, disposable-machine installation, and disabled-S
 
 ## Residual risks
 
-Loopback authentication does not isolate a compromised standard app from its own approved operation. Filesystem validation reduces link and containment mistakes, but future destructive operations still need operation-boundary race checks. Installation ACLs, certificate custody, Windows restore-point policy, and backup quality remain operational responsibilities.
+Loopback authentication does not isolate a compromised standard app from its own approved operation. Filesystem validation reduces link and containment mistakes, but preview state can become stale immediately. Any future destructive operation must resolve its opaque ID and revalidate identity, containment, protections, and reparse state at the final operation boundary. Bounded scans may be incomplete and report diagnostics rather than treating ambiguous candidates as actionable. Installation ACLs, certificate custody, Windows restore-point policy, and backup quality remain operational responsibilities.
 
 MangoDisk informed containment behavior only. No GPL implementation or test code was copied; licensing details remain in `docs/licensing.md`.

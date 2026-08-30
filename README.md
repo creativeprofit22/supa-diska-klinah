@@ -8,7 +8,8 @@ Supa Diska Klinah is a Windows-first Tauri desktop foundation for future disk cl
 - Native Windows x64 and ARM64 build targets.
 - Thin application, one-shot helper, `windows-platform`, and `cleanup-core` crate boundaries.
 - Dashboard and Settings hash routes with feature-owned state.
-- Two commands: foundation status and validated System Restore creation; cleanup is not implemented.
+- Two commands: foundation status and validated System Restore creation; cleanup mutation is not implemented.
+- Platform-neutral validated cleanup rules and a bounded, cancellable preview scan engine.
 - Kudu v2.4.0 compatibility scope mapped but not behaviorally verified.
 - Installer bundling, signing, and updater support intentionally deferred.
 
@@ -43,6 +44,7 @@ The x64 executable is launched locally as a smoke check. GitHub Actions builds a
 ## Project documents
 
 - [Architecture and ownership rules](docs/architecture.md)
+- [Cleanup rule schema and authoring guide](docs/cleanup-rules.md)
 - [Windows development and troubleshooting](docs/development.md)
 - [Kudu parity contract](docs/parity.md)
 - [Threat model and privileged-operation inventory](docs/security.md)

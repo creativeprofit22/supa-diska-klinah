@@ -1,3 +1,14 @@
+mod engine;
+mod filesystem;
+mod protection;
+mod rules;
+mod scanner;
+
+pub use engine::*;
+pub use filesystem::*;
+pub use protection::*;
+pub use rules::*;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

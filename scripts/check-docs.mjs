@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 const requiredDocuments = [
   "docs/architecture.md",
+  "docs/cleanup-rules.md",
   "docs/development.md",
   "docs/parity.md",
   "docs/security.md",

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "temporary-files",
+      "ruleVersion": 1,
+      "lifecycle": "verified",
+      "risk": "safe",
+      "provenance": { "source": "project-maintainer", "verifiedAt": "2026-08-30" },
+      "defaultSelected": true,
+      "scanner": "direct",
+      "roots": [{ "binding": "localAppData", "suffix": "Temp" }],
+      "markers": { "all": [], "any": [] },
+      "targets": ["cache", "tmp"],
+      "targetType": "directory",
+      "rootDepth": 4,
+      "minimumAgeSeconds": 86400,
+      "excludedNames": ["keep"],
+      "excludedPaths": ["important/cache"]
+    },
+    {
+      "id": "node-project-artifacts",
+      "ruleVersion": 1,
+      "lifecycle": "candidate",
+      "risk": "recoverable",
+      "provenance": { "source": "project-maintainer", "verifiedAt": "2026-08-30" },
+      "defaultSelected": false,
+      "scanner": "projectArtifacts",
+      "roots": [{ "binding": "profile", "suffix": "source" }],
+      "markers": { "all": ["package.json"], "any": ["package-lock.json", "pnpm-lock.yaml"] },
+      "targets": ["node_modules"],
+      "targetType": "directory",
+      "rootDepth": 8,
+      "projectDepth": 6,
+      "targetDepth": 2,
+      "minimumAgeSeconds": 3600,
+      "excludedNames": [".git"],
+      "excludedPaths": []
+    }
+  ]
+}

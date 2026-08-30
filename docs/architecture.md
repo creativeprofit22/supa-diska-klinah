@@ -23,7 +23,9 @@ windows-platform (Windows adapter and security policy) -> cleanup-core
 cleanup-core (portable contracts)
 ```
 
-`cleanup-core` contains serializable domain types and contracts only. It cannot depend on Tauri, Windows bindings, filesystems, registries, services, or processes. `windows-platform` owns Windows operations, path policy, protocol validation, broker behavior, and helper dispatch. The application owns only Tauri registration and typed command input. The helper owns only process entry and fixed exit codes. Neither helper nor domain crate depends on Tauri.
+`cleanup-core` contains serializable domain types, validated cleanup rules, scan policy, and platform-neutral filesystem traits. It cannot depend on Tauri, Windows bindings, registries, services, or processes. `windows-platform` implements no-follow metadata, canonical paths, Windows file identities, and rejection of every reparse-point attribute. It also owns Windows path policy, protocol validation, broker behavior, and helper dispatch. The application owns only Tauri registration and typed command input. The helper owns only process entry and fixed exit codes. Neither helper nor domain crate depends on Tauri.
+
+The preview engine accepts caller-resolved absolute root bindings and a complete protection policy. Independent `direct` and `projectArtifacts` scanners share bounded traversal contracts. Cancellation, typed progress, measurement, deterministic parent-first deduplication, and opaque result IDs remain independent of IPC. No cleanup mutation exists.
 
 `scripts/check-architecture.mjs` reads locked Cargo metadata and rejects any other workspace edge. It also rejects runtime `std::process::Command` and Tauri dependencies outside the application.
 
