@@ -4,7 +4,7 @@
 
 The application protects user files, Windows system configuration, restore-point integrity, the packaged helper binary, the one-shot authentication token, and the integrity of each requested operation. A restore point is **not a backup** and does not replace file backups.
 
-The normal Tauri process runs at standard integrity. Its manifest requests `asInvoker`, and startup checks `TokenElevation` before creating a webview. An elevated launch exits. Ordinary status and cleanup preview scanning never request administrator rights; future cleanup mutation must remain standard-integrity unless a separately reviewed operation requires otherwise.
+The normal Tauri process runs at standard integrity. Its manifest requests `asInvoker`, and startup checks `TokenElevation` before creating a webview. An elevated launch exits. Preview, Recycle Bin, quarantine, undo, purge, and permanent cleanup remain standard-integrity operations.
 
 ## Trust boundaries
 
@@ -15,12 +15,12 @@ The normal Tauri process runs at standard integrity. Its manifest requests `asIn
 | Standard app to elevated helper | The helper exposes one operation enum, authenticates one loopback connection, enforces request freshness, then exits. |
 | Loopback transport | The app binds `127.0.0.1` first, uses a random 256-bit token and independent request ID, caps frames at 4 KiB, applies 120-second socket timeouts, and permits 60-second authorizations within a 90-second handshake deadline. Tokens are compared without early exit and are not logged. |
 | Filesystem containment | Rust rejects relative paths, lexical `..`, root equality, sibling-prefix confusion, missing paths, and every reparse-point component before and after canonicalization. |
-| Cleanup preview | The input-free command chooses one fixed temporary root and a private rule in Rust. Windows, Documents, and executable-directory protections, no-follow traversal, stable identities, bounded work, and before/after measurement checks fail closed. Candidate display paths and diagnostics cross IPC, but the private ID-to-path map does not. |
+| Cleanup execution | Rust chooses the fixed temporary root and rule. Display paths cross only in preview; plan, execution, and undo requests contain random opaque IDs. Persisted plans are treated as untrusted, bounded, and revalidated against current protections, strict containment, reparse state, type, identity, markers, age, activity, and occupancy immediately before each mutation. |
 | Installed helper | The broker resolves one exact filename beside the current executable, requires a regular contained non-reparse file, and never searches `PATH`. Protected installation and code signing remain deployment responsibilities. |
 | Windows elevation | Only Windows UAC and the separately manifested helper cross into high integrity. The helper checks its own process token before dispatch. |
 | System Restore | `SrClient.dll` loads only from System32. COM security is initialized for required local service identities, descriptions are bounded, and begin/end calls are paired. |
 
-No generic filesystem, shell, process, sidecar, arbitrary-path deletion, registry, service, or remote-content capability is granted. There is no long-lived listener and no privileged deletion operation.
+No generic filesystem, shell, process, arbitrary-path deletion, registry, service, or remote-content capability is granted. Destructive cleanup is reachable only through Rust-owned plans; permanent deletion has a distinct command and confirmation. There is no privileged deletion operation.
 
 ## Attacker model and assumptions
 
@@ -32,7 +32,7 @@ A process already executing inside the standard-integrity app can request the sa
 
 `CreateSystemRestorePoint` is the only approved helper operation. Its sole argument is a nonempty description containing no control or NUL characters and no more than 128 UTF-16 code units. It accepts no path, executable, registry key, service, command, or shell string. It creates and closes a `MODIFY_SETTINGS` restore point and returns only its sequence number.
 
-Future cleanup commands must accept opaque scan identifiers, resolve paths in Rust, revalidate containment immediately before mutation, and add quarantine or undo semantics. The reusable path validator is not a delete primitive. Privileged deletion is prohibited in this phase.
+Cleanup commands accept opaque scan, candidate, plan, and execution identifiers. Rust resolves paths, journals before and after each item, and fails individual items closed. Manual cleanup defaults to the Windows Recycle Bin; automatic cleanup uses recoverable quarantine before opt-in delayed purge. Privileged deletion remains prohibited.
 
 ## Privileged-operation inventory
 
@@ -50,7 +50,7 @@ Direct Kudu handlers are classified as follows: platform information and onboard
 
 UAC cancellation or denial, disabled System Restore, safe mode, COM initialization failure, low disk space, Windows timeout, missing or replaced helper, malformed or stale messages, wrong tokens, helper loss, and non-loopback peers all fail closed. The standard app remains running and is never relaunched elevated.
 
-The helper and command error boundaries expose only fixed, non-sensitive codes. Restore-point errors include `authorizationCancelled`, `helperUnavailable`, `operationTimedOut`, `invalidRequest`, `privilegeFailure`, `systemRestoreFailure`, and local `invalidInput`; preview errors include `temporaryRootUnavailable`, `protectionUnavailable`, `protectionInvalid`, `catalogInvalid`, `scanFailed`, and `scanUnavailable`. Raw Windows, COM, protocol, token, path, and system error details never cross into the webview or production logs.
+The helper and command error boundaries expose only fixed, non-sensitive codes. Cleanup uses `invalidInput`, `notFound`, `cleanupBusy`, `validationFailed`, `persistenceFailed`, `operationFailed`, and `taskUnavailable`. Raw Windows, trash, persistence, COM, protocol, token, path, and system error details never cross into the webview or production logs.
 
 Callers should retry cancelled authorization only after approving UAC; repair or reinstall an unavailable helper; retry expired requests; and check Windows System Protection plus available disk space after timeout or System Restore failure. A privilege failure means the helper launched without required elevation. If Windows accepts the begin call but the end call fails, inspect System Protection before retrying; do not assume the partial restore point is usable.
 
@@ -62,6 +62,6 @@ Windows 11, ARM64, code signing, disposable-machine installation, and disabled-S
 
 ## Residual risks
 
-Loopback authentication does not isolate a compromised standard app from its own approved operation. Filesystem validation reduces link and containment mistakes, but preview state can become stale immediately. Any future destructive operation must resolve its opaque ID and revalidate identity, containment, protections, and reparse state at the final operation boundary. Bounded scans may be incomplete and report diagnostics rather than treating ambiguous candidates as actionable. Installation ACLs, certificate custody, Windows restore-point policy, and backup quality remain operational responsibilities.
+Loopback authentication does not isolate a compromised standard app from its approved operations. Final filesystem validation narrows link and containment races but cannot eliminate a race after handles close. Recycle Bin enumeration can be affected by concurrent trash activity, so undo requires the exact captured identifier and original path. Concurrent disk activity also means reclaimed bytes are a capped observed free-space delta, not guaranteed causation. Installation ACLs, certificate custody, Windows restore-point policy, and backup quality remain operational responsibilities.
 
 MangoDisk informed containment behavior only. No GPL implementation or test code was copied; licensing details remain in `docs/licensing.md`.

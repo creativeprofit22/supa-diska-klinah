@@ -25,7 +25,7 @@ cleanup-core (portable contracts)
 
 `cleanup-core` contains serializable domain types, validated cleanup rules, scan policy, and platform-neutral filesystem traits. It cannot depend on Tauri, Windows bindings, registries, services, or processes. `windows-platform` implements no-follow metadata, canonical paths, Windows file identities, and rejection of every reparse-point attribute. It also owns Windows path policy, protocol validation, broker behavior, and helper dispatch. The application owns only Tauri registration and typed command input. The helper owns only process entry and fixed exit codes. Neither helper nor domain crate depends on Tauri.
 
-The preview engine accepts caller-resolved absolute root bindings and a complete protection policy. Independent `direct` and `projectArtifacts` scanners share bounded traversal contracts. Cancellation, typed progress, measurement, deterministic parent-first deduplication, and opaque result IDs remain independent of IPC. No cleanup mutation exists.
+The scan engine accepts caller-resolved absolute root bindings and a complete protection policy. Independent `direct` and `projectArtifacts` scanners share bounded traversal contracts. Rust-owned snapshots resolve opaque candidate IDs into immutable persisted plans. `windows-platform` serializes final validation, Recycle Bin, quarantine, permanent deletion, undo, purge, journals, and accounting; Tauri never receives a mutation path.
 
 `scripts/check-architecture.mjs` reads locked Cargo metadata and rejects any other workspace edge. It also rejects runtime `std::process::Command` and Tauri dependencies outside the application.
 
@@ -37,8 +37,8 @@ app/router
   -> shared AppShell
 
 features/dashboard -> its API adapter and status state
-features/cleanup   -> its input-free preview adapter and scan state
-features/settings  -> its local placeholder state
+features/cleanup   -> preview, plan, execution, undo, and history state
+features/settings  -> persisted automatic-cleanup policy state
 shared             -> no app or feature imports
 ```
 
@@ -48,7 +48,7 @@ The hash router keeps packaged navigation independent of an HTTP fallback. Route
 
 ## Tauri capability boundary
 
-The application exposes input-free `foundation_status` and `preview_cleanup` commands plus typed `create_system_restore_point`. The cleanup preview scans only the fixed Windows temporary root chosen by Rust; the webview cannot supply paths, rules, identifiers, limits, or protection policy. `build.rs`, `generate_handler!`, and `capabilities/main.json` must contain the same command set. The capability targets only the local Windows `main` webview. No remote origins are accepted.
+The application exposes foundation and restore-point commands plus cleanup preview, plan creation, safe execution, separate permanent execution, undo, history, and automatic-policy commands. The cleanup webview can supply only bounded opaque identifiers, a disposition, and policy values; it cannot supply paths, roots, rules, limits, protection policy, or deletion primitives. `build.rs`, `generate_handler!`, and `capabilities/main.json` contain the same command set for the local Windows `main` webview only.
 
 Production navigation allows only the packaged Tauri origin. Development additionally allows exactly `http://127.0.0.1:1420`. Content security policies are explicit, asset protocol is disabled, and no shell, filesystem, process, dialog, or updater plugin is granted. The main window is created hidden and unfocused; startup policy shows and focuses it only for foreground launches, preventing minimized launches from flashing or taking focus. The main executable is `asInvoker` and rejects an elevated token before constructing Tauri. Only the separately packaged helper requests UAC.
 

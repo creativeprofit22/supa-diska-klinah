@@ -1,6 +1,6 @@
 # Supa Diska Klinah
 
-Supa Diska Klinah is a Windows-first Tauri desktop foundation for future disk cleanup features. It runs the webview at standard integrity, exposes explicit capability-gated Rust commands, and isolates System Restore creation in a one-shot elevated helper. It does not delete user data.
+Supa Diska Klinah is a Windows-first Tauri desktop cleanup application. It runs the webview at standard integrity, keeps filesystem paths and destructive primitives in Rust, defaults manual cleanup to the Windows Recycle Bin, and isolates System Restore creation in a one-shot elevated helper.
 
 ## Current status
 
@@ -8,7 +8,8 @@ Supa Diska Klinah is a Windows-first Tauri desktop foundation for future disk cl
 - Native Windows x64 and ARM64 build targets.
 - Thin application, one-shot helper, `windows-platform`, and `cleanup-core` crate boundaries.
 - Dashboard and Settings hash routes with feature-owned state.
-- Two commands: foundation status and validated System Restore creation; cleanup mutation is not implemented.
+- Opaque-ID cleanup plans with final no-follow revalidation, resumable journals, and bounded history.
+- Windows Recycle Bin cleanup and undo, automatic quarantine with delayed purge, and separately confirmed permanent deletion.
 - Platform-neutral validated cleanup rules and a bounded, cancellable preview scan engine.
 - Kudu v2.4.0 compatibility scope mapped but not behaviorally verified.
 - Installer bundling, signing, and updater support intentionally deferred.
@@ -45,6 +46,7 @@ The x64 executable is launched locally as a smoke check. GitHub Actions builds a
 
 - [Architecture and ownership rules](docs/architecture.md)
 - [Cleanup rule schema and authoring guide](docs/cleanup-rules.md)
+- [Cleanup execution and recovery](docs/cleanup-recovery.md)
 - [Windows development and troubleshooting](docs/development.md)
 - [Kudu parity contract](docs/parity.md)
 - [Threat model and privileged-operation inventory](docs/security.md)

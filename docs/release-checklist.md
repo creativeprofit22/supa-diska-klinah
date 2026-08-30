@@ -51,6 +51,22 @@ Command: submit through the minimized WebView, cancel UAC, then inspect the app,
 Observed result: cancellation was reported; process `11600` stayed unique and unelevated; no helper remained; `LastIndex` stayed `137`.
 ```
 
+## Disposable cleanup drills
+
+Use only a newly created disposable directory containing synthetic files. Never use personal or shared data.
+
+- [ ] Preview, move one item to the Windows Recycle Bin, and undo the exact item.
+- [ ] Quarantine one item, restart the app, and undo it without duplicate removal.
+- [ ] Enable automatic cleanup, verify the grace deadline, then verify due purge.
+- [ ] Confirm permanent deletion requires the second warning and removes only the selected item.
+- [ ] Record selected, processed, failed, quarantined, purged, occupied, and reclaimed totals.
+
+### Cleanup drill record — 2026-08-30
+
+Command: `cargo test --manifest-path src-tauri/Cargo.toml -p windows-platform cleanup::execution::tests::disposable_recycle_quarantine_purge_and_permanent_drill --locked -- --ignored --exact`
+
+Observed: the test used uniquely named synthetic files under the Windows temporary directory; Recycle Bin deletion and exact undo, quarantine across service restart and undo, enabled-policy due purge, and separately invoked permanent deletion all passed. The owned fixture tree was removed afterward. This does not verify recovery of unrelated or valuable files.
+
 ## Alpha decision
 
 - [x] Automated gates pass for the recorded candidate.

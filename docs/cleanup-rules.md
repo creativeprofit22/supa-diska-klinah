@@ -1,6 +1,6 @@
 # Cleanup rule catalog
 
-Cleanup rules describe **preview-only** discovery. They do not delete, quarantine, restore, or back up files. A preview is not a backup and may become stale immediately.
+Cleanup rules describe bounded discovery and the exact eligibility checks frozen into Rust-owned cleanup plans. A preview is not a backup and may become stale immediately; mutation therefore repeats every applicable rule and filesystem check.
 
 ## Loading and versioning
 
@@ -44,7 +44,7 @@ The caller supplies absolute resolved bindings and a compiled protection policy.
 
 Windows, Program Files, ProgramData, recovery/recycle, profile, documents, cloud-sync, credentials, backup, VM, configured keep paths, and repository metadata must be supplied or recognized as protected. Missing, link-like, identity-less, inaccessible, looping, changing, out-of-root, protected, or truncated candidates are diagnosed and never previewed.
 
-Preview records receive random opaque IDs. Paths remain privately resolvable by the snapshot for a future platform operation. The input-free `preview_cleanup` IPC command exposes only a fixed, read-only rule for `cache` and `tmp` directories beneath the current Windows temporary directory; it does not retain the private resolved-candidate map. No deletion command exists. Any future mutation must revalidate identity, containment, protections, and reparse state immediately before changing data; preview checks cannot eliminate that race.
+Preview records receive random opaque IDs. Rust retains the private snapshot and resolves selected candidate IDs into immutable plans; mutation and undo IPC accept only opaque IDs, never paths or rules. Immediately before each item changes, Rust reloads the bounded plan, recompiles current protections, checks strict root and marker-context containment, rejects every reparse component, confirms type and Windows identity, repeats target, exclusion, marker, age, and activity checks, then remeasures logical and allocated bytes. Any mismatch fails that item closed.
 
 ## Author checklist
 

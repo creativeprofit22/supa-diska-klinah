@@ -62,7 +62,7 @@ These groups cover handlers implemented directly in Kudu's `index.ts` rather tha
 
 The complete inventory is classified as standard-user, mixed, or helper-only in [`security.md`](security.md). Classification is not permission. Only restore-point creation is currently approved for the elevated helper. Kudu's whole-application elevation route is rejected; scanning and ordinary cleanup remain standard integrity.
 
-No privileged delete, arbitrary path, command, registry, service, or shell operation is implemented. Future destructive parity work requires opaque scan identifiers, Rust path resolution, containment revalidation, and quarantine or undo semantics.
+Manual temporary-cache cleanup is implemented at standard integrity with opaque Rust-owned plans, final containment revalidation, Windows Recycle Bin undo, app quarantine, delayed opt-in purge, and separate permanent confirmation. No privileged or arbitrary-path delete, command, registry, service, or shell operation is exposed.
 
 ## Updating this contract
 
