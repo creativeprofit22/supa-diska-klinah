@@ -6,6 +6,11 @@
   "webviews": ["main"],
   "permissions": [
     "allow-preview-cleanup",
+    "allow-create-cleanup-plan",
+    "allow-execute-cleanup-plan",
+    "allow-execute-permanent-cleanup-plan",
+    "allow-undo-cleanup",
+    "allow-cleanup-history",
     "allow-foundation-status",
     "allow-create-system-restore-point"
   ],
