@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      release:
+        description: Build the signed Windows release
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -119,7 +125,7 @@ jobs:
 
   windows-release:
     name: Signed Windows release
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)
     needs: quality
     environment: windows-release
     runs-on: windows-2025
