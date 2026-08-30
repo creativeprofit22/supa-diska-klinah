@@ -18,6 +18,7 @@
     "check:dependencies": "node scripts/check-dependencies.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:native-ci": "node scripts/check-native-ci.mjs",
+    "test:e2e": "node scripts/check-native-ci.mjs",
     "check:parity": "node scripts/check-parity.mjs",
     "check:security": "node scripts/check-security-boundaries.mjs",
     "check:security:commands": "node scripts/check-security-boundaries.mjs commands",
