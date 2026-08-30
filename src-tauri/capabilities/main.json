@@ -5,6 +5,7 @@
   "local": true,
   "webviews": ["main"],
   "permissions": [
+    "allow-preview-cleanup",
     "allow-foundation-status",
     "allow-create-system-restore-point"
   ],

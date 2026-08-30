@@ -14,8 +14,8 @@ const supportedTargets = new Set([
 if (!supportedTargets.has(target)) {
   throw new Error("TAURI_ENV_TARGET_TRIPLE must name a supported Windows MSVC target");
 }
-if (debug !== "true" && debug !== "false") {
-  throw new Error("TAURI_ENV_DEBUG must be exactly true or false");
+if (debug !== undefined && debug !== "true") {
+  throw new Error("TAURI_ENV_DEBUG must be true when set");
 }
 
 const profile = debug === "true" ? "debug" : "release";

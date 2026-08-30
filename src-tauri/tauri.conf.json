@@ -17,6 +17,8 @@
         "title": "Supa Diska Klinah",
         "width": 960,
         "height": 640,
+        "visible": false,
+        "focus": false,
         "minWidth": 720,
         "minHeight": 480
       }

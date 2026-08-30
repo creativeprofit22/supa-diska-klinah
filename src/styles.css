@@ -362,6 +362,98 @@ h2 {
   accent-color: var(--accent);
 }
 
+.cleanup-page-header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1.5rem;
+  max-width: 52rem;
+}
+
+.cleanup-page-header p,
+.cleanup-state-panel p,
+.cleanup-diagnostics,
+.cleanup-record-meta {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.cleanup-page-header button {
+  flex: 0 0 auto;
+}
+
+.cleanup-state-panel,
+.cleanup-summary,
+.cleanup-group {
+  max-width: 52rem;
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: var(--surface);
+}
+
+.cleanup-state-panel {
+  min-height: 10rem;
+  padding: clamp(1.25rem, 3vw, 2rem);
+}
+
+.cleanup-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  padding: 1rem 1.25rem;
+}
+
+.cleanup-summary strong {
+  color: var(--accent);
+}
+
+.cleanup-diagnostics {
+  max-width: 52rem;
+  margin-block: 1rem;
+}
+
+.cleanup-group {
+  margin-block-start: 1rem;
+  overflow: hidden;
+}
+
+.cleanup-group h2 {
+  margin: 0;
+  padding: 1rem 1.25rem;
+  border-block-end: 1px solid var(--border);
+}
+
+.cleanup-records {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cleanup-records li {
+  padding: 1rem 1.25rem;
+  border-block-end: 1px solid var(--border);
+}
+
+.cleanup-records li:last-child {
+  border-block-end: 0;
+}
+
+.cleanup-path {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.cleanup-record-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 1.5rem;
+  margin-block-start: 0.35rem;
+  overflow-wrap: anywhere;
+  font-size: 0.875rem;
+}
+
 @media (max-width: 42.5rem) {
   .app-shell {
     display: block;
@@ -378,7 +470,7 @@ h2 {
   }
 
   nav {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   main {
@@ -389,6 +481,14 @@ h2 {
   .status-list div {
     grid-template-columns: 1fr;
     gap: 0.35rem;
+  }
+
+  .cleanup-page-header {
+    display: grid;
+  }
+
+  .cleanup-page-header button {
+    width: 100%;
   }
 }
 

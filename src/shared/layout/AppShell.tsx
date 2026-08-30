@@ -18,6 +18,7 @@ export function AppShell() {
           <NavLink to="/" end>
             Dashboard
           </NavLink>
+          <NavLink to="/cleanup">Cleanup</NavLink>
           <NavLink to="/settings">Settings</NavLink>
         </nav>
       </aside>

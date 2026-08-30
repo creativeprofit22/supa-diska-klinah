@@ -37,6 +37,7 @@ app/router
   -> shared AppShell
 
 features/dashboard -> its API adapter and status state
+features/cleanup   -> its input-free preview adapter and scan state
 features/settings  -> its local placeholder state
 shared             -> no app or feature imports
 ```
@@ -47,9 +48,9 @@ The hash router keeps packaged navigation independent of an HTTP fallback. Route
 
 ## Tauri capability boundary
 
-The application exposes `foundation_status` and typed `create_system_restore_point`. `build.rs`, `generate_handler!`, and `capabilities/main.json` must contain the same command set. The capability targets only the local Windows `main` webview. No remote origins are accepted.
+The application exposes input-free `foundation_status` and `preview_cleanup` commands plus typed `create_system_restore_point`. The cleanup preview scans only the fixed Windows temporary root chosen by Rust; the webview cannot supply paths, rules, identifiers, limits, or protection policy. `build.rs`, `generate_handler!`, and `capabilities/main.json` must contain the same command set. The capability targets only the local Windows `main` webview. No remote origins are accepted.
 
-Production navigation allows only the packaged Tauri origin. Development additionally allows exactly `http://127.0.0.1:1420`. Content security policies are explicit, asset protocol is disabled, and no shell, filesystem, process, dialog, or updater plugin is granted. The main executable is `asInvoker` and rejects an elevated token before constructing Tauri. Only the separately packaged helper requests UAC.
+Production navigation allows only the packaged Tauri origin. Development additionally allows exactly `http://127.0.0.1:1420`. Content security policies are explicit, asset protocol is disabled, and no shell, filesystem, process, dialog, or updater plugin is granted. The main window is created hidden and unfocused; startup policy shows and focuses it only for foreground launches, preventing minimized launches from flashing or taking focus. The main executable is `asInvoker` and rejects an elevated token before constructing Tauri. Only the separately packaged helper requests UAC.
 
 Adding a command requires all of the following:
 

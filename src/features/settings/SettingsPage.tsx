@@ -21,7 +21,7 @@ export function SettingsPage() {
         <label className="toggle-row">
           <span>
             <strong>Show advanced cleanup options</strong>
-            <small>Preview only. Cleanup controls are not implemented.</small>
+            <small>Advanced cleanup controls are not implemented.</small>
           </span>
           <input
             type="checkbox"

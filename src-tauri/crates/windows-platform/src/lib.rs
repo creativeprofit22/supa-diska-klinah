@@ -4,9 +4,11 @@ compile_error!("windows-platform supports Windows targets only");
 pub mod cleanup;
 pub mod privilege;
 pub mod security;
+mod startup;
 
 pub use cleanup::WindowsFileSystem;
 pub use cleanup_core::FoundationStatus;
+pub use startup::{StartupWindowMode, startup_window_mode};
 
 pub fn foundation_status() -> FoundationStatus {
     FoundationStatus::ready("windows", std::env::consts::ARCH)

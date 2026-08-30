@@ -44,7 +44,7 @@ The caller supplies absolute resolved bindings and a compiled protection policy.
 
 Windows, Program Files, ProgramData, recovery/recycle, profile, documents, cloud-sync, credentials, backup, VM, configured keep paths, and repository metadata must be supplied or recognized as protected. Missing, link-like, identity-less, inaccessible, looping, changing, out-of-root, protected, or truncated candidates are diagnosed and never previewed.
 
-Preview records receive random opaque IDs. Paths remain privately resolvable by the snapshot for a future platform operation. This phase exposes no deletion or IPC command. Any future mutation must revalidate identity, containment, protections, and reparse state immediately before changing data; preview checks cannot eliminate that race.
+Preview records receive random opaque IDs. Paths remain privately resolvable by the snapshot for a future platform operation. The input-free `preview_cleanup` IPC command exposes only a fixed, read-only rule for `cache` and `tmp` directories beneath the current Windows temporary directory; it does not retain the private resolved-candidate map. No deletion command exists. Any future mutation must revalidate identity, containment, protections, and reparse state immediately before changing data; preview checks cannot eliminate that race.
 
 ## Author checklist
 
