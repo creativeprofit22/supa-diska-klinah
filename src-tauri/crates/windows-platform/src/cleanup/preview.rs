@@ -1,7 +1,7 @@
 use cleanup_core::{
     CancellationToken, CatalogLimits, Entropy, FileSystem, FsError, FsErrorKind, PreviewRecord,
     ProtectionInputs, ProtectionPolicy, ScanDiagnostic, ScanEngine, ScanLimits, ScanRequest,
-    load_catalog,
+    ScanSnapshot, load_catalog,
 };
 use serde::Serialize;
 use std::{
@@ -58,33 +58,75 @@ pub enum CleanupPreviewError {
 }
 
 pub fn preview_temporary_caches() -> Result<CleanupPreview, CleanupPreviewError> {
-    let file_system = Arc::new(WindowsFileSystem);
-    let temporary_root = file_system
-        .canonicalize(&std::env::temp_dir())
-        .map_err(|_| CleanupPreviewError::TemporaryRootUnavailable)?;
-    let protection = ProtectionInputs::new(
+    scan_temporary_caches().map(|scan| scan.preview)
+}
+
+pub(crate) struct PrivateCleanupScan {
+    pub preview: CleanupPreview,
+    pub snapshot: ScanSnapshot,
+    pub protection: ProtectionPolicy,
+}
+
+pub(crate) fn current_protection() -> Result<ProtectionPolicy, CleanupPreviewError> {
+    let file_system = WindowsFileSystem;
+    let inputs = ProtectionInputs::new(
         vec![known_folder(&FOLDERID_Windows)?],
         vec![known_folder(&FOLDERID_Documents)?],
         vec![executable_directory()?],
     )
     .map_err(|_| CleanupPreviewError::ProtectionInvalid)?;
-
-    preview_with_context(file_system, temporary_root, protection, &WindowsEntropy)
+    ProtectionPolicy::compile(&file_system, inputs)
+        .map_err(|_| CleanupPreviewError::ProtectionInvalid)
 }
 
+pub(crate) fn temporary_rule() -> Result<cleanup_core::CleanupRule, CleanupPreviewError> {
+    load_catalog(
+        Cursor::new(TEMPORARY_CACHE_RULE.as_bytes()),
+        CatalogLimits::default(),
+    )
+    .map_err(|_| CleanupPreviewError::CatalogInvalid)?
+    .rules()
+    .first()
+    .cloned()
+    .ok_or(CleanupPreviewError::CatalogInvalid)
+}
+
+pub(crate) fn temporary_root() -> Result<PathBuf, CleanupPreviewError> {
+    WindowsFileSystem
+        .canonicalize(&std::env::temp_dir())
+        .map_err(|_| CleanupPreviewError::TemporaryRootUnavailable)
+}
+
+pub(crate) fn scan_temporary_caches() -> Result<PrivateCleanupScan, CleanupPreviewError> {
+    let file_system = Arc::new(WindowsFileSystem);
+    let temporary_root = temporary_root()?;
+    let protection = current_protection()?;
+    scan_with_context(file_system, temporary_root, protection, &WindowsEntropy)
+}
+
+#[cfg(test)]
 fn preview_with_context(
     file_system: Arc<WindowsFileSystem>,
     temporary_root: PathBuf,
     protection_inputs: ProtectionInputs,
     entropy: &dyn Entropy,
 ) -> Result<CleanupPreview, CleanupPreviewError> {
+    let protection = ProtectionPolicy::compile(file_system.as_ref(), protection_inputs)
+        .map_err(|_| CleanupPreviewError::ProtectionInvalid)?;
+    scan_with_context(file_system, temporary_root, protection, entropy).map(|scan| scan.preview)
+}
+
+fn scan_with_context(
+    file_system: Arc<WindowsFileSystem>,
+    temporary_root: PathBuf,
+    protection: ProtectionPolicy,
+    entropy: &dyn Entropy,
+) -> Result<PrivateCleanupScan, CleanupPreviewError> {
     let catalog = load_catalog(
         Cursor::new(TEMPORARY_CACHE_RULE.as_bytes()),
         CatalogLimits::default(),
     )
     .map_err(|_| CleanupPreviewError::CatalogInvalid)?;
-    let protection = ProtectionPolicy::compile(file_system.as_ref(), protection_inputs)
-        .map_err(|_| CleanupPreviewError::ProtectionInvalid)?;
     let roots = HashMap::from([("temp".to_owned(), temporary_root)]);
     let selected = vec!["temporary-caches".to_owned()];
     let result = ScanEngine::new(file_system)
@@ -100,10 +142,14 @@ fn preview_with_context(
         })
         .map_err(|_| CleanupPreviewError::ScanFailed)?;
 
-    Ok(CleanupPreview {
-        scan_id: result.snapshot.scan_id().to_owned(),
-        records: result.snapshot.records().to_vec(),
-        diagnostics: result.diagnostics,
+    Ok(PrivateCleanupScan {
+        preview: CleanupPreview {
+            scan_id: result.snapshot.scan_id().to_owned(),
+            records: result.snapshot.records().to_vec(),
+            diagnostics: result.diagnostics,
+        },
+        snapshot: result.snapshot,
+        protection,
     })
 }
 

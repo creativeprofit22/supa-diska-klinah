@@ -3,7 +3,7 @@ use crate::{
     FsError, ProtectionPolicy, ReadDirControl, RuleCatalog,
     scanner::{CandidateDraft, ScannerRegistry, TraversalContext},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     path::{Component, Path, PathBuf},
@@ -92,10 +92,18 @@ pub enum PreviewKind {
     File,
     Directory,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedCandidate {
     pub path: PathBuf,
+    pub scan_root: PathBuf,
+    pub context_root: PathBuf,
+    pub rule: CleanupRule,
     pub identity: FileIdentity,
+    pub kind: EntryKind,
+    pub logical_bytes: u64,
+    pub allocated_bytes: u64,
+    pub scanned_at: SystemTime,
 }
 #[derive(Debug)]
 pub struct ScanSnapshot {
@@ -113,6 +121,224 @@ impl ScanSnapshot {
     pub fn resolve(&self, id: &str) -> Option<&ResolvedCandidate> {
         self.resolved.get(id)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ValidatedCandidate {
+    pub logical_bytes: u64,
+    pub allocated_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateRejection {
+    InvalidProof,
+    OutsideRoot,
+    LinkLike,
+    TypeChanged,
+    IdentityChanged,
+    RuleMismatch,
+    MarkerMissing,
+    TooRecent,
+    Protected,
+    Active,
+    Unreadable,
+    LimitReached,
+}
+
+pub fn revalidate_candidate(
+    fs: &dyn FileSystem,
+    candidate: &ResolvedCandidate,
+    protection: &ProtectionPolicy,
+    now: SystemTime,
+) -> Result<ValidatedCandidate, CandidateRejection> {
+    let semantics = fs.semantics();
+    if !candidate.path.is_absolute()
+        || !candidate.scan_root.is_absolute()
+        || !candidate.context_root.is_absolute()
+        || semantics.equivalent(&candidate.scan_root, &candidate.path)
+        || semantics.equivalent(&candidate.context_root, &candidate.path)
+        || !semantics.contains(&candidate.scan_root, &candidate.path)
+        || !semantics.contains(&candidate.context_root, &candidate.path)
+    {
+        return Err(CandidateRejection::OutsideRoot);
+    }
+    if protection.is_protected(&candidate.path) {
+        return Err(CandidateRejection::Protected);
+    }
+    let scan_metadata = fs
+        .metadata_no_follow(&candidate.scan_root)
+        .map_err(|_| CandidateRejection::Unreadable)?;
+    if scan_metadata.kind == EntryKind::LinkLike {
+        return Err(CandidateRejection::LinkLike);
+    }
+    let relative = candidate
+        .path
+        .strip_prefix(&candidate.scan_root)
+        .map_err(|_| CandidateRejection::OutsideRoot)?;
+    let mut component_path = candidate.scan_root.clone();
+    for component in relative.components() {
+        component_path.push(component);
+        let metadata = fs
+            .metadata_no_follow(&component_path)
+            .map_err(|_| CandidateRejection::Unreadable)?;
+        if metadata.kind == EntryKind::LinkLike {
+            return Err(CandidateRejection::LinkLike);
+        }
+    }
+    let metadata = fs
+        .metadata_no_follow(&candidate.path)
+        .map_err(|_| CandidateRejection::Unreadable)?;
+    if metadata.kind != candidate.kind {
+        return Err(CandidateRejection::TypeChanged);
+    }
+    if metadata.identity != Some(candidate.identity) {
+        return Err(CandidateRejection::IdentityChanged);
+    }
+    let canonical = fs
+        .canonicalize(&candidate.path)
+        .map_err(|_| CandidateRejection::Unreadable)?;
+    if !semantics.equivalent(&canonical, &candidate.path)
+        || protection.is_protected(&canonical)
+        || !semantics.contains(&candidate.scan_root, &canonical)
+        || !semantics.contains(&candidate.context_root, &canonical)
+    {
+        return Err(if protection.is_protected(&canonical) {
+            CandidateRejection::Protected
+        } else {
+            CandidateRejection::OutsideRoot
+        });
+    }
+    let name = candidate
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(CandidateRejection::RuleMismatch)?;
+    if !crate::scanner::target_matches(&candidate.rule, name, metadata.kind)
+        || crate::scanner::excluded(
+            &candidate.rule,
+            &candidate.scan_root,
+            &candidate.path,
+            semantics,
+        )
+    {
+        return Err(CandidateRejection::RuleMismatch);
+    }
+    if !crate::scanner::old_enough(&candidate.rule, &metadata, now) {
+        return Err(CandidateRejection::TooRecent);
+    }
+    if candidate.rule.scanner == crate::ScannerKind::ProjectArtifacts {
+        let context_metadata = fs
+            .metadata_no_follow(&candidate.context_root)
+            .map_err(|_| CandidateRejection::MarkerMissing)?;
+        let context_identity = context_metadata
+            .identity
+            .ok_or(CandidateRejection::MarkerMissing)?;
+        if context_metadata.kind != EntryKind::Directory {
+            return Err(CandidateRejection::MarkerMissing);
+        }
+        let mut names = HashSet::new();
+        fs.read_dir(&candidate.context_root, context_identity, &mut |entry| {
+            if entry.kind != EntryKind::LinkLike {
+                names.insert(entry.name.to_ascii_lowercase());
+            }
+            ReadDirControl::Continue
+        })
+        .map_err(|_| CandidateRejection::MarkerMissing)?;
+        if !candidate
+            .rule
+            .markers
+            .all
+            .iter()
+            .all(|name| names.contains(&name.to_ascii_lowercase()))
+            || (!candidate.rule.markers.any.is_empty()
+                && !candidate
+                    .rule
+                    .markers
+                    .any
+                    .iter()
+                    .any(|name| names.contains(&name.to_ascii_lowercase())))
+        {
+            return Err(CandidateRejection::MarkerMissing);
+        }
+    }
+    fs.ensure_inactive(&candidate.path)
+        .map_err(|_| CandidateRejection::Active)?;
+    measure_candidate(fs, candidate)
+}
+
+fn measure_candidate(
+    fs: &dyn FileSystem,
+    candidate: &ResolvedCandidate,
+) -> Result<ValidatedCandidate, CandidateRejection> {
+    let metadata = fs
+        .metadata_no_follow(&candidate.path)
+        .map_err(|_| CandidateRejection::Unreadable)?;
+    let mut result = ValidatedCandidate {
+        logical_bytes: if metadata.kind == EntryKind::File {
+            metadata.size
+        } else {
+            0
+        },
+        allocated_bytes: fs
+            .allocated_size(&candidate.path, &metadata)
+            .map_err(|_| CandidateRejection::Unreadable)?,
+    };
+    if metadata.kind != EntryKind::Directory {
+        return Ok(result);
+    }
+    let mut directories = vec![(candidate.path.clone(), candidate.identity)];
+    let mut visited = 0_usize;
+    while let Some((directory, identity)) = directories.pop() {
+        let mut failure = None;
+        fs.read_dir(&directory, identity, &mut |entry| {
+            visited = visited.saturating_add(1);
+            if visited > 250_000 {
+                failure = Some(CandidateRejection::LimitReached);
+                return ReadDirControl::Stop;
+            }
+            let metadata = match fs.metadata_no_follow(&entry.path) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    failure = Some(CandidateRejection::Unreadable);
+                    return ReadDirControl::Stop;
+                }
+            };
+            if metadata.kind == EntryKind::LinkLike || metadata.kind != entry.kind {
+                failure = Some(CandidateRejection::LinkLike);
+                return ReadDirControl::Stop;
+            }
+            let Some(identity) = metadata.identity else {
+                failure = Some(CandidateRejection::IdentityChanged);
+                return ReadDirControl::Stop;
+            };
+            let allocated = match fs.allocated_size(&entry.path, &metadata) {
+                Ok(value) => value,
+                Err(_) => {
+                    failure = Some(CandidateRejection::Unreadable);
+                    return ReadDirControl::Stop;
+                }
+            };
+            let Some(total) = result.allocated_bytes.checked_add(allocated) else {
+                failure = Some(CandidateRejection::LimitReached);
+                return ReadDirControl::Stop;
+            };
+            result.allocated_bytes = total;
+            if metadata.kind == EntryKind::Directory {
+                directories.push((entry.path, identity));
+            } else if let Some(total) = result.logical_bytes.checked_add(metadata.size) {
+                result.logical_bytes = total;
+            } else {
+                failure = Some(CandidateRejection::LimitReached);
+                return ReadDirControl::Stop;
+            }
+            ReadDirControl::Continue
+        })
+        .map_err(|_| CandidateRejection::Unreadable)?;
+        if let Some(failure) = failure {
+            return Err(failure);
+        }
+    }
+    Ok(result)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -355,7 +581,7 @@ impl ScanEngine {
                     continue;
                 }
             };
-            if !self.fs.semantics().contains(&draft.root, &canonical) {
+            if !self.fs.semantics().contains(&draft.scan_root, &canonical) {
                 push_diagnostic(diagnostics, limits, &draft, DiagnosticReason::OutsideRoot);
                 continue;
             }
@@ -412,12 +638,16 @@ impl ScanEngine {
                 continue;
             }
             output.push(Measured {
-                rule_id: draft.rule_id,
+                rule: draft.rule,
+                scan_root: draft.scan_root,
+                context_root: draft.context_root,
                 path: canonical,
                 identity,
                 kind: before.kind,
-                bytes: measured_tree.bytes,
+                logical_bytes: measured_tree.logical_bytes,
+                allocated_bytes: measured_tree.allocated_bytes,
                 modified: before.modified,
+                scanned_at: draft.scanned_at,
             });
         }
         Ok(output)
@@ -441,7 +671,11 @@ impl ScanEngine {
                         && metadata.identity == Some(draft.identity) =>
                 {
                     Ok(Some(MeasuredTree {
-                        bytes: metadata.size,
+                        logical_bytes: metadata.size,
+                        allocated_bytes: self
+                            .fs
+                            .allocated_size(root, &metadata)
+                            .map_err(ScanError::Filesystem)?,
                         entries: vec![MeasuredEntry {
                             path: root.to_path_buf(),
                             metadata,
@@ -464,7 +698,15 @@ impl ScanEngine {
                 }
             };
         }
-        let mut total = 0_u64;
+        let root_metadata = self
+            .fs
+            .metadata_no_follow(root)
+            .map_err(ScanError::Filesystem)?;
+        let mut logical_bytes = 0_u64;
+        let mut allocated_bytes = self
+            .fs
+            .allocated_size(root, &root_metadata)
+            .map_err(ScanError::Filesystem)?;
         let mut stack = vec![(root.to_path_buf(), draft.identity)];
         let mut identities = HashSet::from([draft.identity]);
         let mut entries = Vec::new();
@@ -540,10 +782,22 @@ impl ScanEngine {
                         path: entry.path.clone(),
                         metadata: metadata.clone(),
                     });
+                    let entry_allocated = match self.fs.allocated_size(&entry.path, &metadata) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            stopped = Some(DiagnosticReason::Unreadable);
+                            return ReadDirControl::Stop;
+                        }
+                    };
+                    let Some(next_allocated) = allocated_bytes.checked_add(entry_allocated) else {
+                        stopped = Some(DiagnosticReason::LimitReached);
+                        return ReadDirControl::Stop;
+                    };
+                    allocated_bytes = next_allocated;
                     if metadata.kind == EntryKind::Directory {
                         stack.push((entry.path, identity));
-                    } else if let Some(value) = total.checked_add(metadata.size) {
-                        total = value;
+                    } else if let Some(value) = logical_bytes.checked_add(metadata.size) {
+                        logical_bytes = value;
                     } else {
                         stopped = Some(DiagnosticReason::LimitReached);
                         return ReadDirControl::Stop;
@@ -573,7 +827,8 @@ impl ScanEngine {
             });
         }
         Ok(Some(MeasuredTree {
-            bytes: total,
+            logical_bytes,
+            allocated_bytes,
             entries,
             directories,
         }))
@@ -643,7 +898,8 @@ impl ScanEngine {
 }
 
 struct MeasuredTree {
-    bytes: u64,
+    logical_bytes: u64,
+    allocated_bytes: u64,
     entries: Vec<MeasuredEntry>,
     directories: Vec<MeasuredDirectory>,
 }
@@ -731,12 +987,16 @@ fn discover(
 
 #[derive(Debug)]
 struct Measured {
-    rule_id: String,
+    rule: CleanupRule,
+    scan_root: PathBuf,
+    context_root: PathBuf,
     path: PathBuf,
     identity: FileIdentity,
     kind: EntryKind,
-    bytes: u64,
+    logical_bytes: u64,
+    allocated_bytes: u64,
     modified: Option<SystemTime>,
+    scanned_at: SystemTime,
 }
 fn finalize(
     mut measured: Vec<Measured>,
@@ -747,7 +1007,7 @@ fn finalize(
         path_depth(&left.path)
             .cmp(&path_depth(&right.path))
             .then_with(|| semantics.key(&left.path).cmp(&semantics.key(&right.path)))
-            .then_with(|| left.rule_id.cmp(&right.rule_id))
+            .then_with(|| left.rule.id.cmp(&right.rule.id))
     });
     let mut retained: Vec<Measured> = Vec::new();
     for candidate in measured {
@@ -767,21 +1027,28 @@ fn finalize(
         let id = unique_id(entropy, &mut used)?;
         records.push(PreviewRecord {
             id: id.clone(),
-            rule_id: candidate.rule_id,
+            rule_id: candidate.rule.id.clone(),
             display_path: candidate.path.to_string_lossy().into_owned(),
             kind: if candidate.kind == EntryKind::Directory {
                 PreviewKind::Directory
             } else {
                 PreviewKind::File
             },
-            bytes: candidate.bytes,
+            bytes: candidate.logical_bytes,
             modified_unix_seconds: candidate.modified.and_then(unix_seconds),
         });
         resolved.insert(
             id,
             ResolvedCandidate {
                 path: candidate.path,
+                scan_root: candidate.scan_root,
+                context_root: candidate.context_root,
+                rule: candidate.rule,
                 identity: candidate.identity,
+                kind: candidate.kind,
+                logical_bytes: candidate.logical_bytes,
+                allocated_bytes: candidate.allocated_bytes,
+                scanned_at: candidate.scanned_at,
             },
         );
     }
@@ -870,7 +1137,7 @@ fn push_path_diagnostic(
 ) {
     if output.len() < limits.max_diagnostics {
         output.push(ScanDiagnostic {
-            rule_id: draft.rule_id.clone(),
+            rule_id: draft.rule.id.clone(),
             path: path.to_string_lossy().into_owned(),
             reason,
         });
@@ -885,7 +1152,7 @@ fn push_diagnostic(
 ) {
     if output.len() < limits.max_diagnostics {
         output.push(ScanDiagnostic {
-            rule_id: draft.rule_id.clone(),
+            rule_id: draft.rule.id.clone(),
             path: draft.path.to_string_lossy().into_owned(),
             reason,
         });

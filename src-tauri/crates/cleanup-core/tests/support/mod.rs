@@ -15,6 +15,7 @@ struct State {
     metadata: HashMap<PathBuf, EntryMetadata>,
     children: HashMap<PathBuf, Vec<DirectoryEntry>>,
     unreadable: HashSet<PathBuf>,
+    active_paths: HashSet<PathBuf>,
     changed_after: HashMap<PathBuf, (usize, FixtureChange)>,
     appear_after_read: HashMap<PathBuf, (usize, PathBuf, EntryKind, u64)>,
     directory_reads: HashMap<PathBuf, usize>,
@@ -89,6 +90,12 @@ impl FixtureFs {
     }
     pub fn make_unreadable(&self, path: impl Into<PathBuf>) {
         self.state.lock().unwrap().unreadable.insert(path.into());
+    }
+    pub fn make_active(&self, path: impl Into<PathBuf>) {
+        self.state.lock().unwrap().active_paths.insert(path.into());
+    }
+    pub fn make_inactive(&self, path: &Path) {
+        self.state.lock().unwrap().active_paths.remove(path);
     }
     pub fn change_after(&self, path: impl Into<PathBuf>, calls: usize, change: FixtureChange) {
         self.state
@@ -220,6 +227,16 @@ impl FileSystem for FixtureFs {
             Ok(path.to_path_buf())
         } else {
             Err(FsError::new(FsErrorKind::NotFound, "missing fixture path"))
+        }
+    }
+    fn ensure_inactive(&self, path: &Path) -> Result<(), FsError> {
+        if self.state.lock().unwrap().active_paths.contains(path) {
+            Err(FsError::new(
+                FsErrorKind::PermissionDenied,
+                "fixture active",
+            ))
+        } else {
+            Ok(())
         }
     }
     fn read_dir(

@@ -16,11 +16,13 @@ use std::{
 
 #[derive(Clone, Debug)]
 pub(crate) struct CandidateDraft {
-    pub rule_id: String,
-    pub root: PathBuf,
+    pub rule: CleanupRule,
+    pub scan_root: PathBuf,
+    pub context_root: PathBuf,
     pub path: PathBuf,
     pub kind: EntryKind,
     pub identity: crate::FileIdentity,
+    pub scanned_at: SystemTime,
 }
 
 pub(crate) trait Scanner: Send + Sync {

@@ -63,11 +63,13 @@ impl Scanner for DirectScanner {
                 {
                     context.push_candidate(
                         CandidateDraft {
-                            rule_id: rule.id.clone(),
-                            root: root.to_path_buf(),
+                            rule: rule.clone(),
+                            scan_root: root.to_path_buf(),
+                            context_root: root.to_path_buf(),
                             path: entry.path.clone(),
                             kind: metadata.kind,
                             identity: metadata.identity.expect("validated identity"),
+                            scanned_at: context.now,
                         },
                         &mut output,
                     );

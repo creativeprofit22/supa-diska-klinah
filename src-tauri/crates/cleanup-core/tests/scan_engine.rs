@@ -337,6 +337,88 @@ fn duplicate_ownership_order_and_identifiers_are_deterministic_and_opaque() {
 }
 
 #[test]
+fn snapshots_retain_complete_mutation_validation_proof() {
+    let fs = Arc::new(FixtureFs::new());
+    fs.directory(r"C:\work");
+    fs.directory(r"C:\work\app");
+    fs.file(r"C:\work\app\package.json", 1);
+    fs.directory(r"C:\work\app\node_modules");
+    fs.file(r"C:\work\app\node_modules\data", 9);
+    let rule = r#"{"id":"projects","ruleVersion":3,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":true,"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":3,"targetDepth":2,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    let rules = catalog(rule);
+    let policy = complete_policy(fs.as_ref());
+
+    let result = run(
+        &ScanEngine::new(fs),
+        &rules,
+        &["projects"],
+        &bindings(&[("root", r"C:\work")]),
+        &policy,
+        ScanLimits::default(),
+        &CounterEntropy::default(),
+    )
+    .unwrap();
+    let record = &result.snapshot.records()[0];
+    let proof = result.snapshot.resolve(&record.id).unwrap();
+
+    assert_eq!(proof.scan_root, PathBuf::from(r"C:\work"));
+    assert_eq!(proof.context_root, PathBuf::from(r"C:\work\app"));
+    assert_eq!(proof.rule.id, "projects");
+    assert_eq!(proof.rule.rule_version, 3);
+    assert_eq!(proof.kind, EntryKind::Directory);
+    assert_eq!(proof.logical_bytes, 9);
+    assert!(proof.allocated_bytes >= proof.logical_bytes);
+    assert!(
+        proof
+            .scanned_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .is_ok()
+    );
+}
+
+#[test]
+fn final_validation_rejects_identity_changes_and_new_protection() {
+    let fs = Arc::new(FixtureFs::new());
+    fs.directory(r"C:\scan");
+    fs.directory(r"C:\scan\cache");
+    let rules = catalog(&direct("cache-rule", "root", "\"cache\"", ""));
+    let policy = complete_policy(fs.as_ref());
+    let result = run(
+        &ScanEngine::new(fs.clone()),
+        &rules,
+        &["cache-rule"],
+        &bindings(&[("root", r"C:\scan")]),
+        &policy,
+        ScanLimits::default(),
+        &CounterEntropy::default(),
+    )
+    .unwrap();
+    let proof = result
+        .snapshot
+        .resolve(&result.snapshot.records()[0].id)
+        .unwrap();
+
+    fs.make_active(r"C:\scan\cache");
+    assert_eq!(
+        revalidate_candidate(fs.as_ref(), proof, &policy, std::time::SystemTime::now()),
+        Err(CandidateRejection::Active)
+    );
+    fs.make_inactive(Path::new(r"C:\scan\cache"));
+
+    fs.change_after(r"C:\scan\cache", 1, FixtureChange::Identity);
+    assert_eq!(
+        revalidate_candidate(fs.as_ref(), proof, &policy, std::time::SystemTime::now()),
+        Err(CandidateRejection::IdentityChanged)
+    );
+
+    let protected = complete_policy_with(fs.as_ref(), vec![PathBuf::from(r"C:\scan\cache")]);
+    assert_eq!(
+        revalidate_candidate(fs.as_ref(), proof, &protected, std::time::SystemTime::now()),
+        Err(CandidateRejection::Protected)
+    );
+}
+
+#[test]
 fn progress_reports_discovery_measurement_and_finalization() {
     let fs = Arc::new(FixtureFs::new());
     fs.directory(r"C:\scan");

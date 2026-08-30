@@ -4,13 +4,17 @@ use std::{
     time::SystemTime,
 };
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
+)]
+#[serde(rename_all = "camelCase")]
 pub struct FileIdentity {
     pub volume: u64,
     pub file: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum EntryKind {
     File,
     Directory,
@@ -114,6 +118,14 @@ pub trait FileSystem: Send + Sync {
     fn semantics(&self) -> PathSemantics;
     fn metadata_no_follow(&self, path: &Path) -> Result<EntryMetadata, FsError>;
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, FsError>;
+    fn allocated_size(&self, path: &Path, metadata: &EntryMetadata) -> Result<u64, FsError> {
+        let _ = path;
+        Ok(metadata.size)
+    }
+    fn ensure_inactive(&self, path: &Path) -> Result<(), FsError> {
+        let _ = path;
+        Ok(())
+    }
     fn read_dir(
         &self,
         path: &Path,
