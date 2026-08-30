@@ -32,7 +32,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -362,6 +363,30 @@ h2 {
   accent-color: var(--accent);
 }
 
+.settings-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-block: 1rem;
+}
+
+.settings-field small,
+.settings-note {
+  display: block;
+  margin-block-start: 0.3rem;
+  color: var(--muted);
+}
+
+.settings-field select {
+  min-width: 7rem;
+  padding: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--surface-strong);
+  color: var(--text);
+}
+
 .cleanup-page-header {
   display: flex;
   align-items: end;
@@ -481,6 +506,16 @@ h2 {
   .status-list div {
     grid-template-columns: 1fr;
     gap: 0.35rem;
+  }
+
+  .settings-field {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-field select,
+  .settings-panel .button-row button {
+    width: 100%;
   }
 
   .cleanup-page-header {
