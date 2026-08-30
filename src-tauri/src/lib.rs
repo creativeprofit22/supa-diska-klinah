@@ -20,6 +20,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(|_| std::io::Error::other("cleanup service initialization failed"))?,
             );
             app.manage(Arc::clone(&cleanup_service));
+            tauri::async_runtime::spawn_blocking(move || {
+                let _ = cleanup_service.run_maintenance();
+            });
             if !background_start {
                 let window = app.get_webview_window("main").ok_or_else(|| {
                     std::io::Error::new(std::io::ErrorKind::NotFound, "main window unavailable")
@@ -37,6 +40,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::cleanup::execute_permanent_cleanup_plan,
             commands::cleanup::undo_cleanup,
             commands::cleanup::cleanup_history,
+            commands::cleanup::get_auto_cleanup_policy,
+            commands::cleanup::set_auto_cleanup_policy,
             commands::foundation::foundation_status,
             commands::security::create_system_restore_point
         ])

@@ -1,8 +1,8 @@
 use serde::Serialize;
 use std::sync::Arc;
 use windows_platform::cleanup::{
-    CleanupDisposition, CleanupExecutionSummary, CleanupPlanSummary, CleanupPreview,
-    CleanupService, CleanupServiceError,
+    AutoCleanupPolicy, CleanupDisposition, CleanupExecutionSummary, CleanupPlanSummary,
+    CleanupPreview, CleanupService, CleanupServiceError,
 };
 
 #[derive(Debug, Serialize)]
@@ -118,6 +118,24 @@ pub(crate) async fn cleanup_history(
 ) -> Result<Vec<CleanupExecutionSummary>, CleanupCommandError> {
     let service = Arc::clone(service.inner());
     run_blocking(move || service.history()).await
+}
+
+#[tauri::command]
+pub(crate) async fn get_auto_cleanup_policy(
+    service: tauri::State<'_, Arc<CleanupService>>,
+) -> Result<AutoCleanupPolicy, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.policy()).await
+}
+
+#[tauri::command]
+pub(crate) async fn set_auto_cleanup_policy(
+    service: tauri::State<'_, Arc<CleanupService>>,
+    enabled: bool,
+    grace_days: u16,
+) -> Result<AutoCleanupPolicy, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.set_policy(enabled, grace_days)).await
 }
 
 #[cfg(test)]

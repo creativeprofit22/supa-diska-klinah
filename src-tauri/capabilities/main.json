@@ -11,6 +11,8 @@
     "allow-execute-permanent-cleanup-plan",
     "allow-undo-cleanup",
     "allow-cleanup-history",
+    "allow-get-auto-cleanup-policy",
+    "allow-set-auto-cleanup-policy",
     "allow-foundation-status",
     "allow-create-system-restore-point"
   ],

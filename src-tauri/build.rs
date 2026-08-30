@@ -8,6 +8,8 @@ fn main() {
                 "execute_permanent_cleanup_plan",
                 "undo_cleanup",
                 "cleanup_history",
+                "get_auto_cleanup_policy",
+                "set_auto_cleanup_policy",
                 "foundation_status",
                 "create_system_restore_point",
             ]))
