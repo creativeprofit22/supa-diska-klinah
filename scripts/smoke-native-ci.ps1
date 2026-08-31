@@ -18,7 +18,7 @@ if ($BuildRevision -notmatch "^[0-9a-f]{40}$") {
   throw "Native smoke requires the 40-character source revision used for this build."
 }
 $username = "SupaNativeSmoke"
-$password = [REDACTED] + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(16))
+$password = "Aa1!" + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(16))
 $stdoutPath = [IO.Path]::GetTempFileName()
 $stderrPath = [IO.Path]::GetTempFileName()
 $smokeTempPath = $null
