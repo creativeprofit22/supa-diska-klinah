@@ -4197,7 +4197,7 @@ name = "windows-platform"
 version = "0.1.0"
 dependencies = [
  "cleanup-core",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "junction",
  "serde",
  "serde_json",
