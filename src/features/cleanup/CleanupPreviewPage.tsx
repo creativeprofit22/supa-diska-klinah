@@ -1,27 +1,8 @@
 import { useEffect } from "react";
 import type { CleanupExecutionSummary, PreviewRecord } from "./api/previewCleanup";
+import { formatBytes, formatModified } from "./format";
 import { useCleanupPreview } from "./model/useCleanupPreview";
-
-const byteFormatter = new Intl.NumberFormat();
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${byteFormatter.format(bytes)} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = -1;
-  do {
-    value /= 1024;
-    unit += 1;
-  } while (value >= 1024 && unit < units.length - 1);
-  return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${units[unit]}`;
-}
-
-function formatModified(seconds: number): string {
-  return new Date(seconds * 1000).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
+import { ProjectArtifactDiscovery } from "./ProjectArtifactDiscovery";
 
 function ruleLabel(ruleId: string): string {
   // simplification: Catalog-provided localized labels replace this fallback later.
@@ -138,6 +119,7 @@ export function CleanupPreviewPage() {
           <ul>{state.history.slice(0, 20).map((item) => <li key={item.executionId}><span>{item.disposition}</span><span>{formatBytes(item.accounting.reclaimedBytes)} reclaimed</span></li>)}</ul>
         </section>
       )}
+      <ProjectArtifactDiscovery />
     </section>
   );
 }

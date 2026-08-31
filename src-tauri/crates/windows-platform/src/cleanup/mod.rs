@@ -9,5 +9,8 @@ pub use execution::{
     CleanupServiceError,
 };
 pub use filesystem::WindowsFileSystem;
-pub use preview::{CleanupPreview, CleanupPreviewError, preview_temporary_caches};
+pub use preview::{
+    CleanupPreview, CleanupPreviewError, ProjectArtifactDiscovery, discover_project_artifacts,
+    preview_temporary_caches,
+};
 pub use storage::{AutoCleanupPolicy, CleanupDisposition};

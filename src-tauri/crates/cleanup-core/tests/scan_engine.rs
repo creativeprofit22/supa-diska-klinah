@@ -337,14 +337,14 @@ fn duplicate_ownership_order_and_identifiers_are_deterministic_and_opaque() {
 }
 
 #[test]
-fn snapshots_retain_complete_mutation_validation_proof() {
+fn project_artifacts_snapshot_retains_complete_mutation_validation_proof() {
     let fs = Arc::new(FixtureFs::new());
     fs.directory(r"C:\work");
     fs.directory(r"C:\work\app");
     fs.file(r"C:\work\app\package.json", 1);
     fs.directory(r"C:\work\app\node_modules");
     fs.file(r"C:\work\app\node_modules\data", 9);
-    let rule = r#"{"id":"projects","ruleVersion":3,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":true,"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":3,"targetDepth":2,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    let rule = r#"{"id":"projects","ruleVersion":3,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":true,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":3,"targetDepth":2,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
     let rules = catalog(rule);
     let policy = complete_policy(fs.as_ref());
 
@@ -359,6 +359,24 @@ fn snapshots_retain_complete_mutation_validation_proof() {
     )
     .unwrap();
     let record = &result.snapshot.records()[0];
+    assert_eq!(record.project_name.as_deref(), Some("app"));
+    assert_eq!(record.project_path.as_deref(), Some(r"C:\work\app"));
+    assert_eq!(record.bytes, 9);
+    assert_eq!(record.risk, Some(Risk::Recoverable));
+    assert_eq!(record.default_selected, Some(true));
+    assert_eq!(
+        record.artifact.unwrap().ecosystem,
+        ArtifactEcosystem::NodeJs
+    );
+    assert_eq!(
+        serde_json::to_value(record).unwrap()["artifact"],
+        serde_json::json!({
+            "ecosystem": "nodeJs",
+            "artifactType": "installedDependencies",
+            "recoverability": "rebuildable",
+            "rebuildConsequence": "networkDownloadRequired"
+        })
+    );
     let proof = result.snapshot.resolve(&record.id).unwrap();
 
     assert_eq!(proof.scan_root, PathBuf::from(r"C:\work"));
@@ -457,7 +475,7 @@ fn progress_reports_discovery_measurement_and_finalization() {
 }
 
 #[test]
-fn project_markers_age_and_exclusions_are_honored() {
+fn project_artifacts_markers_age_and_exclusions_are_honored() {
     let fs = Arc::new(FixtureFs::new());
     fs.directory(r"C:\work");
     fs.directory(r"C:\work\app");
@@ -466,7 +484,7 @@ fn project_markers_age_and_exclusions_are_honored() {
     fs.file(r"C:\work\app\node_modules\x", 3);
     fs.directory(r"C:\work\unmarked");
     fs.directory(r"C:\work\unmarked\node_modules");
-    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":true,"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":3,"targetDepth":2,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":true,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":3,"targetDepth":2,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
     let rules = catalog(rule);
     let policy = complete_policy(fs.as_ref());
     let result = run(
@@ -484,6 +502,132 @@ fn project_markers_age_and_exclusions_are_honored() {
         result.snapshot.records()[0]
             .display_path
             .ends_with("node_modules")
+    );
+}
+
+#[test]
+fn nested_project_artifacts_are_ordered_without_duplicates() {
+    let fs = Arc::new(FixtureFs::new());
+    fs.directory(r"C:\work");
+    fs.directory(r"C:\work\app");
+    fs.file(r"C:\work\app\package.json", 1);
+    fs.directory(r"C:\work\app\node_modules");
+    fs.file(r"C:\work\app\node_modules\app.bin", 3);
+    fs.directory(r"C:\work\app\packages");
+    fs.directory(r"C:\work\app\packages\child");
+    fs.file(r"C:\work\app\packages\child\package.json", 1);
+    fs.directory(r"C:\work\app\packages\child\node_modules");
+    fs.file(r"C:\work\app\packages\child\node_modules\child.bin", 5);
+    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":false,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":4,"targetDepth":0,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    let rules = catalog(rule);
+    let policy = complete_policy(fs.as_ref());
+
+    let result = run(
+        &ScanEngine::new(fs),
+        &rules,
+        &["projects"],
+        &bindings(&[("root", r"C:\work")]),
+        &policy,
+        ScanLimits::default(),
+        &CounterEntropy::default(),
+    )
+    .unwrap();
+    let paths: Vec<_> = result
+        .snapshot
+        .records()
+        .iter()
+        .map(|record| record.display_path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            r"C:\work\app\node_modules",
+            r"C:\work\app\packages\child\node_modules"
+        ]
+    );
+}
+
+#[test]
+fn project_artifacts_matched_tree_is_measured_but_not_searched_for_projects() {
+    let fs = Arc::new(FixtureFs::new());
+    fs.directory(r"C:\work");
+    fs.directory(r"C:\work\app");
+    fs.file(r"C:\work\app\package.json", 1);
+    fs.directory(r"C:\work\app\node_modules");
+    fs.file(r"C:\work\app\node_modules\top.bin", 9);
+    fs.directory(r"C:\work\app\node_modules\dependency");
+    fs.file(r"C:\work\app\node_modules\dependency\package.json", 2);
+    fs.directory(r"C:\work\app\node_modules\dependency\node_modules");
+    fs.file(
+        r"C:\work\app\node_modules\dependency\node_modules\nested.bin",
+        5,
+    );
+    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":false,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":4,"targetDepth":0,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    let rules = catalog(rule);
+    let policy = complete_policy(fs.as_ref());
+
+    let result = run(
+        &ScanEngine::new(fs),
+        &rules,
+        &["projects"],
+        &bindings(&[("root", r"C:\work")]),
+        &policy,
+        ScanLimits::default(),
+        &CounterEntropy::default(),
+    )
+    .unwrap();
+    assert_eq!(result.snapshot.records().len(), 1);
+    assert_eq!(result.snapshot.records()[0].bytes, 16);
+    assert_eq!(
+        result.snapshot.records()[0].project_name.as_deref(),
+        Some("app")
+    );
+}
+
+#[test]
+fn project_artifacts_links_and_visit_limits_fail_closed() {
+    let fs = Arc::new(FixtureFs::new());
+    fs.directory(r"C:\work");
+    fs.directory(r"C:\work\app");
+    fs.file(r"C:\work\app\package.json", 1);
+    fs.directory(r"C:\work\app\node_modules");
+    fs.file(r"C:\work\app\node_modules\dependency.bin", 3);
+    fs.link(r"C:\work\linked-project");
+    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":false,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":4,"targetDepth":0,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    let rules = catalog(rule);
+    let policy = complete_policy(fs.as_ref());
+
+    let complete = run(
+        &ScanEngine::new(fs.clone()),
+        &rules,
+        &["projects"],
+        &bindings(&[("root", r"C:\work")]),
+        &policy,
+        ScanLimits::default(),
+        &CounterEntropy::default(),
+    )
+    .unwrap();
+    assert_eq!(complete.snapshot.records().len(), 1);
+
+    let limited = run(
+        &ScanEngine::new(fs),
+        &rules,
+        &["projects"],
+        &bindings(&[("root", r"C:\work")]),
+        &policy,
+        ScanLimits {
+            max_visited_entries: 1,
+            ..ScanLimits::default()
+        },
+        &CounterEntropy::default(),
+    )
+    .unwrap();
+    assert!(limited.snapshot.records().is_empty());
+    assert!(
+        limited
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.reason == DiagnosticReason::LimitReached)
     );
 }
 

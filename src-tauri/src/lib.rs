@@ -35,6 +35,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(navigation::plugin())
         .invoke_handler(tauri::generate_handler![
             commands::cleanup::preview_cleanup,
+            commands::cleanup::discover_project_artifacts,
             commands::cleanup::create_cleanup_plan,
             commands::cleanup::execute_cleanup_plan,
             commands::cleanup::execute_permanent_cleanup_plan,

@@ -2,7 +2,8 @@ use serde::Serialize;
 use std::sync::Arc;
 use windows_platform::cleanup::{
     AutoCleanupPolicy, CleanupDisposition, CleanupExecutionSummary, CleanupPlanSummary,
-    CleanupPreview, CleanupService, CleanupServiceError,
+    CleanupPreview, CleanupPreviewError, CleanupService, CleanupServiceError,
+    ProjectArtifactDiscovery, discover_project_artifacts as discover_project_artifacts_adapter,
 };
 
 #[derive(Debug, Serialize)]
@@ -48,9 +49,29 @@ impl From<CleanupServiceError> for CleanupCommandError {
     }
 }
 
-async fn run_blocking<T: Send + 'static>(
-    operation: impl FnOnce() -> Result<T, CleanupServiceError> + Send + 'static,
-) -> Result<T, CleanupCommandError> {
+impl From<CleanupPreviewError> for CleanupCommandError {
+    fn from(error: CleanupPreviewError) -> Self {
+        match error {
+            CleanupPreviewError::ProjectRootInvalid => Self {
+                code: "invalidInput",
+                message: "The project root was invalid.",
+            },
+            _ => Self {
+                code: "discoveryFailed",
+                message: "Project artifacts could not be scanned.",
+            },
+        }
+    }
+}
+
+async fn run_blocking<T, E>(
+    operation: impl FnOnce() -> Result<T, E> + Send + 'static,
+) -> Result<T, CleanupCommandError>
+where
+    T: Send + 'static,
+    E: Send + 'static,
+    CleanupCommandError: From<E>,
+{
     tauri::async_runtime::spawn_blocking(operation)
         .await
         .map_err(|_| CleanupCommandError::task_unavailable())?
@@ -63,6 +84,13 @@ pub(crate) async fn preview_cleanup(
 ) -> Result<CleanupPreview, CleanupCommandError> {
     let service = Arc::clone(service.inner());
     run_blocking(move || service.preview()).await
+}
+
+#[tauri::command]
+pub(crate) async fn discover_project_artifacts(
+    root: String,
+) -> Result<ProjectArtifactDiscovery, CleanupCommandError> {
+    run_blocking(move || discover_project_artifacts_adapter(&root)).await
 }
 
 fn validate_manual_disposition(disposition: CleanupDisposition) -> Result<(), CleanupCommandError> {
@@ -148,6 +176,30 @@ mod tests {
         assert!(validate_manual_disposition(CleanupDisposition::Permanent).is_ok());
         let error = validate_manual_disposition(CleanupDisposition::Quarantine).unwrap_err();
         assert_eq!(error.code, "invalidInput");
+    }
+
+    #[test]
+    fn project_discovery_failures_map_to_stable_non_sensitive_errors() {
+        let invalid = CleanupCommandError::from(CleanupPreviewError::ProjectRootInvalid);
+        assert_eq!(invalid.code, "invalidInput");
+        assert_eq!(invalid.message, "The project root was invalid.");
+
+        for error in [
+            CleanupPreviewError::TemporaryRootUnavailable,
+            CleanupPreviewError::ProtectionUnavailable,
+            CleanupPreviewError::ProtectionInvalid,
+            CleanupPreviewError::CatalogInvalid,
+            CleanupPreviewError::ScanFailed,
+        ] {
+            let command_error = CleanupCommandError::from(error);
+            assert_eq!(command_error.code, "discoveryFailed");
+            assert_eq!(
+                command_error.message,
+                "Project artifacts could not be scanned."
+            );
+            assert!(!command_error.message.contains('\\'));
+            assert!(!command_error.message.contains("C:"));
+        }
     }
 
     #[test]

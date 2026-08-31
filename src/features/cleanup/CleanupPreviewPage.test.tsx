@@ -3,7 +3,11 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CleanupPreviewPage } from "./CleanupPreviewPage";
-import type { CleanupExecutionSummary, CleanupPreview } from "./api/previewCleanup";
+import type {
+  CleanupExecutionSummary,
+  CleanupPreview,
+  ProjectArtifactDiscovery,
+} from "./api/previewCleanup";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -16,6 +20,28 @@ const preview: CleanupPreview = {
     displayPath: "C:\\Users\\private\\cache",
     kind: "directory",
     bytes: 1024,
+  }],
+  diagnostics: [],
+};
+
+const projectDiscovery: ProjectArtifactDiscovery = {
+  records: [{
+    id: "p".repeat(32),
+    ruleId: "node-installed-dependencies",
+    displayPath: "C:\\work\\app\\node_modules",
+    kind: "directory",
+    bytes: 1536,
+    modifiedUnixSeconds: 1_700_000_000,
+    projectName: "app",
+    projectPath: "C:\\work\\app",
+    artifact: {
+      ecosystem: "nodeJs",
+      artifactType: "installedDependencies",
+      recoverability: "rebuildable",
+      rebuildConsequence: "networkDownloadRequired",
+    },
+    risk: "recoverable",
+    defaultSelected: false,
   }],
   diagnostics: [],
 };
@@ -39,9 +65,15 @@ function execution(disposition: "recycleBin" | "permanent"): CleanupExecutionSum
   };
 }
 
-function mockBackend(result: CleanupPreview = preview) {
+function mockBackend(
+  result: CleanupPreview = preview,
+  discovery: ProjectArtifactDiscovery | Promise<ProjectArtifactDiscovery> | Error = projectDiscovery,
+) {
   invoke.mockImplementation((command: string) => {
     if (command === "preview_cleanup") return Promise.resolve(result);
+    if (command === "discover_project_artifacts") {
+      return discovery instanceof Error ? Promise.reject(discovery) : Promise.resolve(discovery);
+    }
     if (command === "cleanup_history") return Promise.resolve([]);
     if (command === "create_cleanup_plan") return Promise.resolve({
       planId: "c".repeat(32),
@@ -59,6 +91,115 @@ describe("CleanupPreviewPage", () => {
   afterEach(() => {
     cleanup();
     invoke.mockReset();
+  });
+
+  it("shows project discovery first-use state without invoking discovery", async () => {
+    mockBackend({ ...preview, records: [] });
+    render(<CleanupPreviewPage />);
+
+    expect(screen.getByLabelText("Project root")).toBeTruthy();
+    expect(screen.getByText("Paste one explicit Windows project path to inspect it.")).toBeTruthy();
+    await screen.findByRole("heading", { name: "Nothing found" });
+    expect(invoke.mock.calls.some(([command]) => command === "discover_project_artifacts")).toBe(false);
+  });
+
+  it("submits the native project form and disables duplicates while pending", async () => {
+    let resolveDiscovery!: (value: ProjectArtifactDiscovery) => void;
+    const pending = new Promise<ProjectArtifactDiscovery>((resolve) => {
+      resolveDiscovery = resolve;
+    });
+    mockBackend(preview, pending);
+    render(<CleanupPreviewPage />);
+    fireEvent.change(screen.getByLabelText("Project root"), { target: { value: "C:\\work\\app" } });
+    const submit = screen.getByRole("button", { name: "Scan project root" });
+    fireEvent.submit(submit.closest("form")!);
+
+    expect(await screen.findByText("Scanning the project root without changing files.")).toBeTruthy();
+    const pendingButton = screen.getByRole("button", { name: "Scanning…" }) as HTMLButtonElement;
+    expect(pendingButton.disabled).toBe(true);
+    fireEvent.click(pendingButton);
+    expect(invoke.mock.calls.filter(([command]) => command === "discover_project_artifacts")).toHaveLength(1);
+    expect(invoke).toHaveBeenCalledWith("discover_project_artifacts", { root: "C:\\work\\app" });
+
+    resolveDiscovery(projectDiscovery);
+    expect(await screen.findByText("1 rebuildable artifact found.")).toBeTruthy();
+  });
+
+  it("rejects oversized UTF-8 roots but accepts the 4,096-byte boundary", async () => {
+    mockBackend();
+    render(<CleanupPreviewPage />);
+    const input = screen.getByLabelText("Project root") as HTMLInputElement;
+    const submit = screen.getByRole("button", { name: "Scan project root" }) as HTMLButtonElement;
+    const form = submit.closest("form")!;
+
+    fireEvent.change(input, { target: { value: `C:\\${"界".repeat(1_365)}` } });
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Project root must be 4,096 UTF-8 bytes or fewer.",
+    );
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(submit.disabled).toBe(true);
+    fireEvent.submit(form);
+    expect(invoke.mock.calls.some(([command]) => command === "discover_project_artifacts")).toBe(false);
+
+    const boundaryRoot = `C:\\${"a".repeat(4_093)}`;
+    fireEvent.change(input, { target: { value: boundaryRoot } });
+    expect(screen.queryByText("Project root must be 4,096 UTF-8 bytes or fewer.")).toBeNull();
+    expect(submit.disabled).toBe(false);
+    fireEvent.submit(form);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      "discover_project_artifacts",
+      { root: boundaryRoot },
+    ));
+  });
+
+  it("renders empty and bounded diagnostic project states", async () => {
+    mockBackend(preview, {
+      records: [],
+      diagnostics: [{ ruleId: "node", path: "C:\\private\\secret", reason: "unreadable" }],
+    });
+    render(<CleanupPreviewPage />);
+    fireEvent.change(screen.getByLabelText("Project root"), { target: { value: "C:\\work\\empty" } });
+    fireEvent.click(screen.getByRole("button", { name: "Scan project root" }));
+
+    expect(await screen.findByText("No marker-backed Node.js dependency folders were found.")).toBeTruthy();
+    expect(screen.getByText("1 location was skipped.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("private\\secret");
+    expect(document.body.textContent).not.toContain("unreadable");
+  });
+
+  it("renders read-only project intelligence without destructive controls", async () => {
+    mockBackend();
+    render(<CleanupPreviewPage />);
+    fireEvent.change(screen.getByLabelText("Project root"), { target: { value: "C:\\work\\app" } });
+    fireEvent.click(screen.getByRole("button", { name: "Scan project root" }));
+
+    const list = await screen.findByRole("list", { name: "Discovered project artifacts" });
+    expect(within(list).getByRole("heading", { name: "app" })).toBeTruthy();
+    expect(within(list).getByText("C:\\work\\app")).toBeTruthy();
+    for (const value of [
+      "Node.js",
+      "Installed dependencies",
+      "1.5 KB",
+      "Recoverable",
+      "Rebuildable",
+      "Network download required",
+    ]) expect(within(list).getByText(value)).toBeTruthy();
+    expect(within(list).queryByRole("checkbox")).toBeNull();
+    expect(within(list).queryByRole("button")).toBeNull();
+  });
+
+  it("shows a fixed project error and retries the same root", async () => {
+    mockBackend(preview, new Error("C:\\private\\secret raw OS failure"));
+    render(<CleanupPreviewPage />);
+    fireEvent.change(screen.getByLabelText("Project root"), { target: { value: "C:\\work\\app" } });
+    fireEvent.click(screen.getByRole("button", { name: "Scan project root" }));
+
+    expect(await screen.findByText("Project artifacts could not be scanned. Check the root and try again.")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("private\\secret");
+    fireEvent.click(screen.getByRole("button", { name: "Try project scan again" }));
+    await waitFor(() => expect(
+      invoke.mock.calls.filter(([command]) => command === "discover_project_artifacts"),
+    ).toHaveLength(2));
   });
 
   it("loads preview and bounded history without command inputs", async () => {
@@ -98,7 +239,7 @@ describe("CleanupPreviewPage", () => {
     expect(await screen.findByRole("heading", { name: "Temporary caches" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Other rule" })).toBeTruthy();
     expect(screen.getByText(/Modified/)).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toContain("0 of 2 selected");
+    expect(screen.getByText("0 of 2 selected")).toBeTruthy();
   });
 
   it("shows only a skipped count from diagnostics", async () => {

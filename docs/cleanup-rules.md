@@ -17,6 +17,7 @@ The maintained example is [`catalog-v1.json`](../src-tauri/crates/cleanup-core/t
 | `risk` | `safe`, `recoverable`, or `highImpact`. |
 | `provenance` | Nonempty `source` and `verifiedAt` evidence strings. |
 | `defaultSelected` | Initial selection; forbidden for candidate, deprecated, disabled, and high-impact rules. |
+| `artifact` | Required for `projectArtifacts` and rejected for `direct`; closed ecosystem, artifact type, recoverability, and rebuild-consequence metadata. |
 | `scanner` | `direct` or `projectArtifacts`. Unknown kinds fail closed. |
 | `roots` | Caller binding plus a normalized relative `suffix`; never an environment variable. |
 | `markers` | Immediate single-component names in `all` and `any`; project scanners require markers. |
@@ -26,7 +27,15 @@ The maintained example is [`catalog-v1.json`](../src-tauri/crates/cleanup-core/t
 | `minimumAgeSeconds` | Minimum elapsed age; missing or future timestamps do not satisfy a positive age. |
 | `excludedNames`, `excludedPaths` | Case-insensitive components and normalized relative paths never emitted or entered. |
 
-Default limits are 256 rules, 16 roots per rule, 64 values per name field, 64 excluded paths, 512 UTF-8 bytes per text value, and depth 64. Empty targets, absolute paths, `..`, path separators in names, contradictory scanner fields, and duplicate IDs are invalid.
+Default limits are 256 rules, 16 roots per rule, 64 values per name field, 64 excluded paths, 512 UTF-8 bytes per text value, and depth 64. Empty targets, absolute paths, `..`, path separators in names, contradictory scanner fields, unknown artifact enum values, and duplicate IDs are invalid.
+
+Artifact metadata currently permits only `nodeJs`, `installedDependencies`, `rebuildable`, and `networkDownloadRequired`. These serialize as exact camel-case values; extending an enum requires schema fixtures and UI handling.
+
+## Node.js project discovery
+
+The first production project rule requires an immediate `package.json` marker and discovers only a directory named `node_modules`. A generic directory name without that marker is not a candidate. Matched artifact trees are measured within limits but are not searched for nested project roots. Results remain unselected and read-only.
+
+The read-only adapter accepts one explicit absolute Windows root up to 4,096 UTF-8 bytes. It scans with at most 2 workers, 100,000 visited entries, 2,000 candidates, 100 diagnostics, 250,000 measurement entries, project depth 8, and target depth 0. It does not save the root or return a reusable scan identifier.
 
 ## Lifecycle workflow
 

@@ -1,6 +1,7 @@
 use crate::{
-    CleanupRule, DirectoryEntry, Entropy, EntryKind, EntryMetadata, FileIdentity, FileSystem,
-    FsError, ProtectionPolicy, ReadDirControl, RuleCatalog,
+    ArtifactIntelligence, CleanupRule, DirectoryEntry, Entropy, EntryKind, EntryMetadata,
+    FileIdentity, FileSystem, FsError, ProtectionPolicy, ReadDirControl, Risk, RuleCatalog,
+    ScannerKind,
     scanner::{CandidateDraft, ScannerRegistry, TraversalContext},
 };
 use serde::{Deserialize, Serialize};
@@ -85,6 +86,16 @@ pub struct PreviewRecord {
     pub kind: PreviewKind,
     pub bytes: u64,
     pub modified_unix_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactIntelligence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk: Option<Risk>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_selected: Option<bool>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1025,6 +1036,7 @@ fn finalize(
     let mut resolved = HashMap::with_capacity(retained.len());
     for candidate in retained {
         let id = unique_id(entropy, &mut used)?;
+        let project_artifact = candidate.rule.scanner == ScannerKind::ProjectArtifacts;
         records.push(PreviewRecord {
             id: id.clone(),
             rule_id: candidate.rule.id.clone(),
@@ -1036,6 +1048,12 @@ fn finalize(
             },
             bytes: candidate.logical_bytes,
             modified_unix_seconds: candidate.modified.and_then(unix_seconds),
+            project_name: project_artifact.then(|| project_name(&candidate.context_root)),
+            project_path: project_artifact
+                .then(|| candidate.context_root.to_string_lossy().into_owned()),
+            artifact: candidate.rule.artifact,
+            risk: project_artifact.then_some(candidate.rule.risk),
+            default_selected: project_artifact.then_some(candidate.rule.default_selected),
         });
         resolved.insert(
             id,
@@ -1057,6 +1075,16 @@ fn finalize(
         records,
         resolved,
     })
+}
+
+fn project_name(path: &Path) -> String {
+    let display = path.to_string_lossy();
+    display
+        .trim_end_matches(['\\', '/'])
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(&display)
+        .to_owned()
 }
 
 fn select_rules<'a>(

@@ -6,6 +6,7 @@
   "webviews": ["main"],
   "permissions": [
     "allow-preview-cleanup",
+    "allow-discover-project-artifacts",
     "allow-create-cleanup-plan",
     "allow-execute-cleanup-plan",
     "allow-execute-permanent-cleanup-plan",

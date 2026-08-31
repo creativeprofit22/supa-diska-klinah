@@ -575,6 +575,121 @@ dialog::backdrop {
 }
 
 
+.project-artifacts {
+  max-width: 52rem;
+  margin-block-start: 3rem;
+  padding-block-start: 2rem;
+  border-block-start: 1px solid var(--border);
+}
+
+.project-artifacts-header {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(16rem, 1.5fr);
+  gap: 1rem 2rem;
+  align-items: end;
+}
+
+.project-artifacts-header h2,
+.project-artifacts-header p,
+.project-artifact-status p,
+.project-artifact-records h3,
+.project-artifact-records p {
+  margin-block: 0;
+}
+
+.project-artifacts-header > p,
+.project-artifact-status,
+.project-artifact-diagnostics,
+.project-artifact-path {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.project-artifact-form {
+  margin-block-start: 1.25rem;
+}
+
+.project-artifact-form label {
+  display: block;
+  margin-block-end: 0.4rem;
+  font-weight: 700;
+}
+
+.project-artifact-form-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.project-artifact-form-row input {
+  min-width: 0;
+  flex: 1 1 24rem;
+  min-height: 2.75rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.project-artifact-status {
+  min-height: 2.75rem;
+  padding-block-start: 0.75rem;
+}
+
+.project-artifact-status button {
+  margin-block-start: 0.75rem;
+}
+
+.project-artifact-diagnostics {
+  margin-block: 0.5rem 0;
+}
+
+.project-artifact-records {
+  margin: 1rem 0 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  list-style: none;
+  overflow: hidden;
+}
+
+.project-artifact-records > li {
+  min-width: 0;
+  padding: 1.25rem;
+  border-block-end: 1px solid var(--border);
+}
+
+.project-artifact-records > li:last-child {
+  border-block-end: 0;
+}
+
+.project-artifact-path {
+  margin-block-start: 0.3rem;
+  overflow-wrap: anywhere;
+}
+
+.project-artifact-records dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem 1.5rem;
+  margin-block: 1rem 0;
+}
+
+.project-artifact-records dl div {
+  min-width: 0;
+}
+
+.project-artifact-records dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.project-artifact-records dd {
+  margin: 0.2rem 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+}
+
 @media (max-width: 42.5rem) {
   .app-shell {
     display: block;
@@ -618,14 +733,32 @@ dialog::backdrop {
     display: grid;
   }
 
-  .cleanup-page-header button {
+  .cleanup-page-header button,
+.project-artifact-form-row button {
     width: 100%;
+  }
+
+.project-artifacts-header,
+.project-artifact-records dl {
+    grid-template-columns: 1fr;
+  }
+
+ .project-artifact-form-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .project-artifact-form-row input {
+    width: 100%;
+    flex-basis: auto;
   }
 }
 
 @media (forced-colors: active) {
   .brand-mark,
-  button {
+  button,
+  .project-artifact-form-row input,
+  .project-artifact-records {
     border-color: ButtonText;
   }
 

@@ -64,6 +64,8 @@ The complete inventory is classified as standard-user, mixed, or helper-only in 
 
 Manual temporary-cache cleanup is implemented at standard integrity with opaque Rust-owned plans, final containment revalidation, Windows Recycle Bin undo, app quarantine, delayed opt-in purge, and separate permanent confirmation. No privileged or arbitrary-path delete, command, registry, service, or shell operation is exposed.
 
+Phase 5 project discovery is partial: one explicit root can produce read-only intelligence for marker-backed Node.js `node_modules`. Rust, Python, .NET, Gradle/Java, CMake, framework-specific, game-engine, saved-root, whole-drive, selection, and project-artifact cleanup behavior remain unimplemented. This narrow slice is not ecosystem-complete parity.
+
 ## Updating this contract
 
 Add or rename a row only after reviewing the pinned upstream revision. A behavior becomes `Implemented` only when its command contract exists. It becomes `Verified` only after a parity test exercises equivalent success, failure, validation, and safety behavior.

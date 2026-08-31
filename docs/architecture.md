@@ -27,6 +27,8 @@ cleanup-core (portable contracts)
 
 The scan engine accepts caller-resolved absolute root bindings and a complete protection policy. Independent `direct` and `projectArtifacts` scanners share bounded traversal contracts. Rust-owned snapshots resolve opaque candidate IDs into immutable persisted plans. `windows-platform` serializes final validation, Recycle Bin, quarantine, permanent deletion, undo, purge, journals, and accounting; Tauri never receives a mutation path.
 
+Project artifact discovery is a deliberately separate read-only projection. Its Windows adapter accepts one bounded untrusted root, applies the existing no-follow filesystem, canonical containment, reparse rejection, complete protection policy, and fixed scan limits, then returns enriched display records and bounded diagnostics. It immediately drops the private snapshot, so discovery cannot supply an identifier to plan creation or deletion.
+
 `scripts/check-architecture.mjs` reads locked Cargo metadata and rejects any other workspace edge. It also rejects runtime `std::process::Command` and Tauri dependencies outside the application.
 
 ## Frontend ownership
@@ -48,7 +50,7 @@ The hash router keeps packaged navigation independent of an HTTP fallback. Route
 
 ## Tauri capability boundary
 
-The application exposes foundation and restore-point commands plus cleanup preview, plan creation, safe execution, separate permanent execution, undo, history, and automatic-policy commands. The cleanup webview can supply only bounded opaque identifiers, a disposition, and policy values; it cannot supply paths, roots, rules, limits, protection policy, or deletion primitives. `build.rs`, `generate_handler!`, and `capabilities/main.json` contain the same command set for the local Windows `main` webview only.
+The application exposes foundation and restore-point commands plus cleanup preview, read-only project discovery, plan creation, safe execution, separate permanent execution, undo, history, and automatic-policy commands. The only path-input exception is `discover_project_artifacts`: the local webview may submit one bounded root string solely to the read-only adapter. Mutation commands still accept only bounded opaque identifiers, dispositions, and policy values; they accept no paths, roots, rules, limits, protection policy, or deletion primitives. `build.rs`, `generate_handler!`, and `capabilities/main.json` contain the same command set for the local Windows `main` webview only.
 
 Production navigation allows only the packaged Tauri origin. Development additionally allows exactly `http://127.0.0.1:1420`. Content security policies are explicit, asset protocol is disabled, and no shell, filesystem, process, dialog, or updater plugin is granted. The main window is created hidden and unfocused; startup policy shows and focuses it only for foreground launches, preventing minimized launches from flashing or taking focus. The main executable is `asInvoker` and rejects an elevated token before constructing Tauri. Only the separately packaged helper requests UAC.
 

@@ -1,12 +1,17 @@
 use cleanup_core::{
-    CancellationToken, CatalogLimits, Entropy, FileSystem, FsError, FsErrorKind, PreviewRecord,
-    ProtectionInputs, ProtectionPolicy, ScanDiagnostic, ScanEngine, ScanLimits, ScanRequest,
-    ScanSnapshot, load_catalog,
+    CancellationToken, CatalogLimits, Entropy, EntryKind, FileSystem, FsError, FsErrorKind,
+    PreviewRecord, ProtectionInputs, ProtectionPolicy, ScanDiagnostic, ScanEngine, ScanLimits,
+    ScanRequest, ScanSnapshot, load_catalog,
 };
 use serde::Serialize;
 use std::{
-    collections::HashMap, ffi::OsString, io::Cursor, os::windows::ffi::OsStringExt, path::PathBuf,
-    ptr, sync::Arc,
+    collections::HashMap,
+    ffi::OsString,
+    io::Cursor,
+    os::windows::ffi::OsStringExt,
+    path::{Component, PathBuf},
+    ptr,
+    sync::Arc,
 };
 use windows_sys::Win32::{
     System::Com::CoTaskMemFree,
@@ -32,10 +37,46 @@ const TEMPORARY_CACHE_RULE: &str = r#"{
   }]
 }"#;
 
+const PROJECT_ARTIFACT_RULE: &str = r#"{
+  "schemaVersion": 1,
+  "rules": [{
+    "id": "node-installed-dependencies",
+    "ruleVersion": 1,
+    "lifecycle": "candidate",
+    "risk": "recoverable",
+    "provenance": { "source": "built-in Node.js discovery", "verifiedAt": "2026-08-30" },
+    "defaultSelected": false,
+    "artifact": {
+      "ecosystem": "nodeJs",
+      "artifactType": "installedDependencies",
+      "recoverability": "rebuildable",
+      "rebuildConsequence": "networkDownloadRequired"
+    },
+    "scanner": "projectArtifacts",
+    "roots": [{ "binding": "projectRoot", "suffix": "" }],
+    "markers": { "all": ["package.json"], "any": [] },
+    "targets": ["node_modules"],
+    "targetType": "directory",
+    "rootDepth": 0,
+    "projectDepth": 8,
+    "targetDepth": 0
+  }]
+}"#;
+
+const MAX_PROJECT_ROOT_BYTES: usize = 4_096;
+
 const PREVIEW_LIMITS: ScanLimits = ScanLimits {
     max_workers: 2,
     max_visited_entries: 50_000,
     max_candidates: 1_000,
+    max_diagnostics: 100,
+    max_measurement_entries: 250_000,
+};
+
+const PROJECT_DISCOVERY_LIMITS: ScanLimits = ScanLimits {
+    max_workers: 2,
+    max_visited_entries: 100_000,
+    max_candidates: 2_000,
     max_diagnostics: 100,
     max_measurement_entries: 250_000,
 };
@@ -48,9 +89,17 @@ pub struct CleanupPreview {
     pub diagnostics: Vec<ScanDiagnostic>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectArtifactDiscovery {
+    pub records: Vec<PreviewRecord>,
+    pub diagnostics: Vec<ScanDiagnostic>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CleanupPreviewError {
     TemporaryRootUnavailable,
+    ProjectRootInvalid,
     ProtectionUnavailable,
     ProtectionInvalid,
     CatalogInvalid,
@@ -59,6 +108,19 @@ pub enum CleanupPreviewError {
 
 pub fn preview_temporary_caches() -> Result<CleanupPreview, CleanupPreviewError> {
     scan_temporary_caches().map(|scan| scan.preview)
+}
+
+pub fn discover_project_artifacts(
+    root: &str,
+) -> Result<ProjectArtifactDiscovery, CleanupPreviewError> {
+    let file_system: Arc<dyn FileSystem> = Arc::new(WindowsFileSystem);
+    let root = validate_project_root(file_system.as_ref(), root)?;
+    discover_project_artifacts_with_context(
+        file_system,
+        root,
+        current_protection()?,
+        &WindowsEntropy,
+    )
 }
 
 pub(crate) struct PrivateCleanupScan {
@@ -102,6 +164,65 @@ pub(crate) fn scan_temporary_caches() -> Result<PrivateCleanupScan, CleanupPrevi
     let temporary_root = temporary_root()?;
     let protection = current_protection()?;
     scan_with_context(file_system, temporary_root, protection, &WindowsEntropy)
+}
+
+fn validate_project_root(
+    file_system: &dyn FileSystem,
+    root: &str,
+) -> Result<PathBuf, CleanupPreviewError> {
+    if root.trim().is_empty()
+        || root.len() > MAX_PROJECT_ROOT_BYTES
+        || root.chars().any(char::is_control)
+    {
+        return Err(CleanupPreviewError::ProjectRootInvalid);
+    }
+    let path = PathBuf::from(root);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(CleanupPreviewError::ProjectRootInvalid);
+    }
+    let metadata = file_system
+        .metadata_no_follow(&path)
+        .map_err(|_| CleanupPreviewError::ProjectRootInvalid)?;
+    if metadata.kind != EntryKind::Directory || metadata.identity.is_none() {
+        return Err(CleanupPreviewError::ProjectRootInvalid);
+    }
+    Ok(path)
+}
+
+fn discover_project_artifacts_with_context(
+    file_system: Arc<dyn FileSystem>,
+    root: PathBuf,
+    protection: ProtectionPolicy,
+    entropy: &dyn Entropy,
+) -> Result<ProjectArtifactDiscovery, CleanupPreviewError> {
+    let catalog = load_catalog(
+        Cursor::new(PROJECT_ARTIFACT_RULE.as_bytes()),
+        CatalogLimits::default(),
+    )
+    .map_err(|_| CleanupPreviewError::CatalogInvalid)?;
+    let roots = HashMap::from([("projectRoot".to_owned(), root)]);
+    let selected = vec!["node-installed-dependencies".to_owned()];
+    let result = ScanEngine::new(file_system)
+        .scan(ScanRequest {
+            catalog: &catalog,
+            selected_rule_ids: &selected,
+            root_bindings: &roots,
+            protection: &protection,
+            limits: PROJECT_DISCOVERY_LIMITS,
+            cancellation: CancellationToken::new(),
+            entropy,
+            progress: &|_| {},
+        })
+        .map_err(|_| CleanupPreviewError::ScanFailed)?;
+
+    Ok(ProjectArtifactDiscovery {
+        records: result.snapshot.records().to_vec(),
+        diagnostics: result.diagnostics,
+    })
 }
 
 #[cfg(test)]
@@ -304,6 +425,109 @@ mod tests {
         )
         .unwrap_err();
 
+        assert_eq!(error, CleanupPreviewError::ScanFailed);
+    }
+
+    #[test]
+    fn project_artifacts_require_markers_and_return_intelligence_without_scan_id() {
+        let temp = TestDirectory::new();
+        let (scan, protection_inputs) = test_context(&temp);
+        let app = scan.join("app");
+        fs::create_dir(&app).unwrap();
+        fs::write(app.join("package.json"), b"{}").unwrap();
+        fs::create_dir(app.join("node_modules")).unwrap();
+        fs::write(app.join("node_modules/dependency.bin"), b"dependencies").unwrap();
+        let scratch = scan.join("scratch");
+        fs::create_dir(&scratch).unwrap();
+        fs::create_dir(scratch.join("node_modules")).unwrap();
+        let file_system: Arc<dyn FileSystem> = Arc::new(WindowsFileSystem);
+        let protection =
+            ProtectionPolicy::compile(file_system.as_ref(), protection_inputs).unwrap();
+
+        let discovery = discover_project_artifacts_with_context(
+            file_system,
+            scan,
+            protection,
+            &TestEntropy::default(),
+        )
+        .unwrap();
+
+        assert_eq!(discovery.records.len(), 1);
+        let record = &discovery.records[0];
+        assert_eq!(record.project_name.as_deref(), Some("app"));
+        assert!(record.project_path.as_deref().unwrap().ends_with("app"));
+        assert_eq!(record.bytes, 12);
+        assert_eq!(record.default_selected, Some(false));
+        assert_eq!(
+            serde_json::to_value(&discovery).unwrap()["records"][0]["artifact"],
+            serde_json::json!({
+                "ecosystem": "nodeJs",
+                "artifactType": "installedDependencies",
+                "recoverability": "rebuildable",
+                "rebuildConsequence": "networkDownloadRequired"
+            })
+        );
+        assert!(
+            serde_json::to_value(discovery)
+                .unwrap()
+                .get("scanId")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn project_artifacts_invalid_roots_are_rejected_before_discovery() {
+        let temp = TestDirectory::new();
+        let directory = temp.directory("directory");
+        let file = temp.0.join("file.txt");
+        fs::write(&file, b"file").unwrap();
+        let file_system = WindowsFileSystem;
+
+        for root in [
+            "",
+            "relative",
+            r"C:\work\..\secret",
+            file.to_str().unwrap(),
+            temp.0.join("missing").to_str().unwrap(),
+        ] {
+            assert_eq!(
+                validate_project_root(&file_system, root),
+                Err(CleanupPreviewError::ProjectRootInvalid)
+            );
+        }
+        let oversized = format!(r"C:\{}", "x".repeat(MAX_PROJECT_ROOT_BYTES));
+        assert_eq!(
+            validate_project_root(&file_system, &oversized),
+            Err(CleanupPreviewError::ProjectRootInvalid)
+        );
+        assert_eq!(
+            validate_project_root(&file_system, directory.to_str().unwrap()),
+            Ok(directory)
+        );
+    }
+
+    #[test]
+    fn project_artifacts_protected_root_fails_closed() {
+        let temp = TestDirectory::new();
+        let scan = temp.directory("scan");
+        fs::write(scan.join("package.json"), b"{}").unwrap();
+        fs::create_dir(scan.join("node_modules")).unwrap();
+        let documents = temp.directory("documents");
+        let executable = temp.directory("executable");
+        let file_system: Arc<dyn FileSystem> = Arc::new(WindowsFileSystem);
+        let protection = ProtectionPolicy::compile(
+            file_system.as_ref(),
+            ProtectionInputs::new(vec![scan.clone()], vec![documents], vec![executable]).unwrap(),
+        )
+        .unwrap();
+
+        let error = discover_project_artifacts_with_context(
+            file_system,
+            scan,
+            protection,
+            &TestEntropy::default(),
+        )
+        .unwrap_err();
         assert_eq!(error, CleanupPreviewError::ScanFailed);
     }
 

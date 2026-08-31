@@ -64,6 +64,39 @@ pub enum TargetType {
     Either,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArtifactEcosystem {
+    NodeJs,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ArtifactType {
+    InstalledDependencies,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Recoverability {
+    Rebuildable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RebuildConsequence {
+    NetworkDownloadRequired,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArtifactIntelligence {
+    pub ecosystem: ArtifactEcosystem,
+    pub artifact_type: ArtifactType,
+    pub recoverability: Recoverability,
+    pub rebuild_consequence: RebuildConsequence,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Provenance {
@@ -97,6 +130,8 @@ pub struct CleanupRule {
     pub risk: Risk,
     pub provenance: Provenance,
     pub default_selected: bool,
+    #[serde(default)]
+    pub artifact: Option<ArtifactIntelligence>,
     pub scanner: ScannerKind,
     pub roots: Vec<RuleRoot>,
     #[serde(default)]
@@ -250,7 +285,9 @@ fn validate(source: SourceCatalog, limits: CatalogLimits) -> Result<RuleCatalog,
             ScannerKind::Direct
                 if !rule.markers.all.is_empty()
                     || !rule.markers.any.is_empty()
-                    || rule.project_depth.is_some() =>
+                    || rule.project_depth.is_some()
+                    || rule.target_depth.is_some()
+                    || rule.artifact.is_some() =>
             {
                 return invalid("direct scanner cannot define project fields");
             }
@@ -263,6 +300,9 @@ fn validate(source: SourceCatalog, limits: CatalogLimits) -> Result<RuleCatalog,
                 if rule.project_depth.is_none() || rule.target_depth.is_none() =>
             {
                 return invalid("projectArtifacts requires projectDepth and targetDepth");
+            }
+            ScannerKind::ProjectArtifacts if rule.artifact.is_none() => {
+                return invalid("projectArtifacts requires artifact intelligence");
             }
             _ => {}
         }

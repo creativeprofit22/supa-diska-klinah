@@ -11,6 +11,7 @@ The normal Tauri process runs at standard integrity. Its manifest requests `asIn
 | Boundary | Enforcement |
 | --- | --- |
 | Webview to Rust IPC | Only local content in the `main` webview receives explicit application-command permissions. Rust validates typed input. |
+| Project discovery input | One read-only command accepts an untrusted absolute root string, bounded to 4,096 UTF-8 bytes. Rust rejects empty, relative, lexical-parent, control-containing, missing, file, identity-less, protected, and reparse roots before candidate discovery. |
 | Top-level navigation | Production accepts only `http://tauri.localhost`; development additionally accepts exactly `http://127.0.0.1:1420`. Credentials, remote hosts, alternate ports, schemes, and lookalikes are rejected. |
 | Standard app to elevated helper | The helper exposes one operation enum, authenticates one loopback connection, enforces request freshness, then exits. |
 | Loopback transport | The app binds `127.0.0.1` first, uses a random 256-bit token and independent request ID, caps frames at 4 KiB, applies 120-second socket timeouts, and permits 60-second authorizations within a 90-second handshake deadline. Tokens are compared without early exit and are not logged. |
@@ -24,7 +25,9 @@ No generic filesystem, shell, process, arbitrary-path deletion, registry, servic
 
 ## Attacker model and assumptions
 
-Untrusted inputs include webview content, command payloads, helper arguments, loopback peers, framed JSON, local filesystem entries, repository content, and build environment variables. The design assumes same-user processes may race or guess ports, local web content may be compromised, Windows UAC behaves correctly, the installed directory is protected from standard users, and no administrator compromise already exists.
+Untrusted inputs include webview content, the explicit project-discovery root, command payloads, helper arguments, loopback peers, framed JSON, local filesystem entries, repository content, and build environment variables. The design assumes same-user processes may race or guess ports, local web content may be compromised, Windows UAC behaves correctly, the installed directory is protected from standard users, and no administrator compromise already exists.
+
+Project discovery accepts no custom rule JSON, shell string, command, or executable argument. It requires `package.json`, skips link-like children, proves canonical containment, and caps workers, traversal, candidates, diagnostics, and measurement. Its snapshot and resolved candidates are dropped immediately; its response has no scan or plan identifier, and mutation services never receive its root or results.
 
 A process already executing inside the standard-integrity app can request the same bounded restore-point operation the app exposes. The operation enum, description validation, helper token, freshness limit, and one-request lifetime cap that residual blast radius. They do not protect against an attacker who already controls an administrator process or can replace a legitimately trusted installed helper.
 
@@ -50,7 +53,7 @@ Direct Kudu handlers are classified as follows: platform information and onboard
 
 UAC cancellation or denial, disabled System Restore, safe mode, COM initialization failure, low disk space, Windows timeout, missing or replaced helper, malformed or stale messages, wrong tokens, helper loss, and non-loopback peers all fail closed. The standard app remains running and is never relaunched elevated.
 
-The helper and command error boundaries expose only fixed, non-sensitive codes. Cleanup uses `invalidInput`, `notFound`, `cleanupBusy`, `validationFailed`, `persistenceFailed`, `operationFailed`, and `taskUnavailable`. Raw Windows, trash, persistence, COM, protocol, token, path, and system error details never cross into the webview or production logs.
+The helper and command error boundaries expose only fixed, non-sensitive codes. Cleanup uses `invalidInput`, `notFound`, `cleanupBusy`, `validationFailed`, `persistenceFailed`, `operationFailed`, `discoveryFailed`, and `taskUnavailable`. Discovery errors never echo the submitted root or raw filesystem details. Raw Windows, trash, persistence, COM, protocol, token, path, and system error details never cross into the webview or production logs.
 
 Callers should retry cancelled authorization only after approving UAC; repair or reinstall an unavailable helper; retry expired requests; and check Windows System Protection plus available disk space after timeout or System Restore failure. A privilege failure means the helper launched without required elevation. If Windows accepts the begin call but the end call fails, inspect System Protection before retrying; do not assume the partial restore point is usable.
 

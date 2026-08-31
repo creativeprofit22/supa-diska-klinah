@@ -3,6 +3,7 @@ fn main() {
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(&[
                 "preview_cleanup",
+                "discover_project_artifacts",
                 "create_cleanup_plan",
                 "execute_cleanup_plan",
                 "execute_permanent_cleanup_plan",

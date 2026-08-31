@@ -21,6 +21,26 @@ export interface PreviewRecord {
   modifiedUnixSeconds?: number | null;
 }
 
+export interface ArtifactIntelligence {
+  ecosystem: "nodeJs";
+  artifactType: "installedDependencies";
+  recoverability: "rebuildable";
+  rebuildConsequence: "networkDownloadRequired";
+}
+
+export interface ProjectArtifactRecord extends PreviewRecord {
+  projectName: string;
+  projectPath: string;
+  artifact: ArtifactIntelligence;
+  risk: "recoverable";
+  defaultSelected: false;
+}
+
+export interface ProjectArtifactDiscovery {
+  records: ProjectArtifactRecord[];
+  diagnostics: ScanDiagnostic[];
+}
+
 export interface ScanDiagnostic {
   ruleId: string;
   path: string;
@@ -69,6 +89,10 @@ export interface CleanupExecutionSummary {
 
 export function previewCleanup(): Promise<CleanupPreview> {
   return invoke<CleanupPreview>("preview_cleanup");
+}
+
+export function discoverProjectArtifacts(root: string): Promise<ProjectArtifactDiscovery> {
+  return invoke<ProjectArtifactDiscovery>("discover_project_artifacts", { root });
 }
 
 export function createCleanupPlan(

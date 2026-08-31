@@ -25,6 +25,12 @@
       "risk": "recoverable",
       "provenance": { "source": "project-maintainer", "verifiedAt": "2026-08-30" },
       "defaultSelected": false,
+      "artifact": {
+        "ecosystem": "nodeJs",
+        "artifactType": "installedDependencies",
+        "recoverability": "rebuildable",
+        "rebuildConsequence": "networkDownloadRequired"
+      },
       "scanner": "projectArtifacts",
       "roots": [{ "binding": "profile", "suffix": "source" }],
       "markers": { "all": ["package.json"], "any": ["package-lock.json", "pnpm-lock.yaml"] },

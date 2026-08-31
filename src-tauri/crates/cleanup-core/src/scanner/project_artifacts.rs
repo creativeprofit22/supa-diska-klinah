@@ -59,6 +59,7 @@ impl Scanner for ProjectArtifactsScanner {
             }
             for entry in entries.into_iter().rev() {
                 if entry.kind != EntryKind::Directory
+                    || target_matches(rule, &entry.name, entry.kind)
                     || excluded(rule, root, &entry.path, context.fs.semantics())
                     || context.protection.is_protected(&entry.path)
                 {
