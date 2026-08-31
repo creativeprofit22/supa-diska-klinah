@@ -7,7 +7,7 @@ function Invoke-NativeSmoke {
 
   $env:SMOKE_FIXTURE_MODE = $Mode
   try {
-    $output = & "$PSScriptRoot/smoke-native.ps1" -Target x86_64-pc-windows-msvc -Directory $tempDirectory
+    $output = & "$PSScriptRoot/smoke-native.ps1" -Target x86_64-pc-windows-msvc -Directory $tempDirectory -LaunchOnly
     return @{ Error = $null; Output = ($output -join "`n") }
   }
   catch {
@@ -169,11 +169,20 @@ public static class NativeSmokeFixture
   if (-not $smokeSource.Contains("-WindowStyle Hidden")) {
     throw "Native smoke must prevent the CI desktop from showing its process window."
   }
-  if ($smokeSource.IndexOf('$env:SUPA_DISKA_KLINAH_SMOKE_MINIMIZED') -gt $smokeSource.IndexOf('Start-Process')) {
+  if (-not $smokeSource.Contains("taskkill.exe")) {
+    throw "A live native process tree must be terminated atomically by Windows."
+  }
+  if ($smokeSource.IndexOf('$env:SUPA_DISKA_KLINAH_SMOKE_MINIMIZED') -gt $smokeSource.IndexOf('$process = Start-Process')) {
     throw "Native smoke must configure hidden startup before launching the executable."
   }
+  $projectSmokeSource = Get-Content -Path "$PSScriptRoot/smoke-project-discovery.ps1" -Raw
+  foreach ($required in @("Runtime.evaluate", "Page.captureScreenshot", "requestSubmit", "fixtureBefore", "fixtureAfter")) {
+    if (-not $projectSmokeSource.Contains($required)) {
+      throw "Native project discovery smoke is missing required packaged-WebView evidence: $required"
+    }
+  }
 
-  Write-Output "Native smoke window filtering, diagnostics, hidden launch, and process-tree cleanup verified."
+  Write-Output "Native smoke launch guards, process cleanup, WebView interaction, and evidence capture verified."
 }
 finally {
   if ($fixtureChildId) {

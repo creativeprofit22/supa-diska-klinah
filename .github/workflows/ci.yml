@@ -119,9 +119,18 @@ jobs:
       - name: Build native debug executable
         run: pnpm tauri build --debug --no-bundle --target ${{ matrix.target }}
 
-      - name: Launch native executable as standard user
+      - name: Verify native project discovery as standard user
         shell: pwsh
-        run: ./scripts/smoke-native-ci.ps1 -Target ${{ matrix.target }}
+        run: ./scripts/smoke-native-ci.ps1 -Target ${{ matrix.target }} -BuildRevision $env:GITHUB_SHA -ArtifactDirectory "artifacts/native-smoke/${{ matrix.target }}"
+
+      - name: Upload native smoke evidence
+        if: always()
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-smoke-${{ matrix.architecture }}
+          path: artifacts/native-smoke/${{ matrix.target }}
+          if-no-files-found: warn
 
   windows-release:
     name: Signed Windows release

@@ -2,7 +2,10 @@ param(
   [Parameter(Mandatory = $true)]
   [ValidateSet("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc")]
   [string]$Target,
-  [string]$Directory
+  [string]$Directory,
+  [string]$ArtifactDirectory,
+  [string]$BuildRevision,
+  [switch]$LaunchOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,31 +23,41 @@ function Stop-ProcessTreeAndWait {
 
   $treeIds = [Collections.Generic.HashSet[int]]::new()
   $treeIds.Add($RootProcess.Id) | Out-Null
-
-  for ($attempt = 0; $attempt -lt 20; $attempt++) {
-    $changed = $true
-    $processes = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
-    while ($changed) {
-      $changed = $false
-      foreach ($candidate in $processes) {
-        if ($treeIds.Contains([int]$candidate.ParentProcessId) -and $treeIds.Add([int]$candidate.ProcessId)) {
-          $changed = $true
-        }
+  $snapshot = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+  $changed = $true
+  while ($changed) {
+    $changed = $false
+    foreach ($candidate in $snapshot) {
+      if ($treeIds.Contains([int]$candidate.ParentProcessId) -and $treeIds.Add([int]$candidate.ProcessId)) {
+        $changed = $true
       }
     }
-
-    $runningIds = @($treeIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
-    if ($runningIds.Count -eq 0) {
-      return
-    }
-
-    Stop-Process -Id $runningIds -Force -ErrorAction SilentlyContinue
-    Wait-Process -Id $runningIds -Timeout 1 -ErrorAction SilentlyContinue
   }
 
-  $remainingIds = @($treeIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+  $RootProcess.Refresh()
+  if (-not $RootProcess.HasExited) {
+    $taskkill = Start-Process -FilePath "$env:SystemRoot\System32\taskkill.exe" -ArgumentList "/PID", $RootProcess.Id, "/T", "/F" -WindowStyle Hidden -Wait -PassThru
+    if ($taskkill.ExitCode -eq 0) {
+      $taskkill.Dispose()
+      $RootProcess.WaitForExit(5000) | Out-Null
+      return
+    }
+    $taskkill.Dispose()
+  }
+
+  $descendants = @(
+    $treeIds |
+      Where-Object { $_ -ne $RootProcess.Id } |
+      ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+  )
+  $RootProcess.Refresh()
+  if (-not $RootProcess.HasExited) { $descendants += $RootProcess }
+  if ($descendants.Count -eq 0) { return }
+  Stop-Process -InputObject $descendants -Force -ErrorAction SilentlyContinue
+  Wait-Process -InputObject $descendants -Timeout 2 -ErrorAction SilentlyContinue
+  $remainingIds = @($descendants | Where-Object { -not $_.HasExited } | ForEach-Object Id)
   if ($remainingIds.Count -gt 0) {
-    throw "Native smoke process tree did not stop: $($remainingIds -join ', ')."
+    throw "Native smoke processes did not stop: $($remainingIds -join ', ')."
   }
 }
 
@@ -172,11 +185,28 @@ public static class ProcessTokenProbe
 }
 "@
 
+if (-not $LaunchOnly) {
+  . "$PSScriptRoot/smoke-project-discovery.ps1"
+  if (-not $ArtifactDirectory) {
+    $ArtifactDirectory = Join-Path (Get-Location) "artifacts/native-smoke/$Target"
+  }
+  if (-not $BuildRevision) {
+    $BuildRevision = (& git rev-parse --verify HEAD 2>$null).Trim()
+  }
+  if ($BuildRevision -notmatch "^[0-9a-f]{40}$") {
+    throw "Native smoke requires the 40-character source revision used for this build."
+  }
+}
+
 $env:SUPA_DISKA_KLINAH_SMOKE_MINIMIZED = "1"
 $stdoutPath = [IO.Path]::GetTempFileName()
 $stderrPath = [IO.Path]::GetTempFileName()
 $process = $null
+$projectSmoke = $null
 try {
+  if (-not $LaunchOnly) {
+    $projectSmoke = New-ProjectArtifactSmokeContext -ArtifactDirectory $ArtifactDirectory -BuildRevision $BuildRevision -Target $Target
+  }
   $process = Start-Process -FilePath $exe -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
   $processHandle = $process.Handle
   $windowSeen = $false
@@ -203,12 +233,21 @@ try {
   if ([ProcessTokenProbe]::IsElevated($process.Handle)) {
     throw "Native executable unexpectedly runs with an elevated token."
   }
-  Write-Output "$Target native executable remained non-visible at standard integrity with its helper present."
+  if ($projectSmoke) {
+    Invoke-ProjectArtifactDiscoverySmoke -Context $projectSmoke -Process $process
+    Write-Output "$Target native project discovery passed through packaged WebView IPC; evidence: $ArtifactDirectory"
+  }
+  else {
+    Write-Output "$Target native executable remained non-visible at standard integrity with its helper present."
+  }
 }
 finally {
   if ($process) {
     Stop-ProcessTreeAndWait -RootProcess $process
     $process.Dispose()
+  }
+  if ($projectSmoke) {
+    Close-ProjectArtifactSmokeContext -Context $projectSmoke
   }
   Remove-RedirectedOutputFiles -Paths $stdoutPath, $stderrPath
 }
