@@ -176,7 +176,7 @@ public static class NativeSmokeFixture
     throw "Native smoke must configure hidden startup before launching the executable."
   }
   $projectSmokeSource = Get-Content -Path "$PSScriptRoot/smoke-project-discovery.ps1" -Raw
-  foreach ($required in @("Runtime.evaluate", "Page.captureScreenshot", "requestSubmit", "fixtureBefore", "fixtureAfter")) {
+  foreach ($required in @("Runtime.evaluate", "Page.captureScreenshot", "requestSubmit", "fixtureBefore", "fixtureAfter", "LocalApplicationData")) {
     if (-not $projectSmokeSource.Contains($required)) {
       throw "Native project discovery smoke is missing required packaged-WebView evidence: $required"
     }

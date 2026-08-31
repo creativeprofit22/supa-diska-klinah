@@ -71,7 +71,8 @@ function New-ProjectArtifactSmokeContext {
   )
 
   New-Item -ItemType Directory -Path $ArtifactDirectory -Force | Out-Null
-  $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) "supa-project-discovery-$PID-$([Guid]::NewGuid().ToString('N'))"
+  $fixtureBase = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  $fixtureRoot = Join-Path $fixtureBase "supa-project-discovery-$PID-$([Guid]::NewGuid().ToString('N'))"
   $project = Join-Path $fixtureRoot "native-smoke-project"
   $empty = Join-Path $fixtureRoot "unmarked-sibling"
   New-Item -ItemType Directory -Path (Join-Path $project "node_modules"), (Join-Path $empty "node_modules") | Out-Null
