@@ -2369,6 +2369,250 @@ mod tests {
         }
     }
 
+    struct QuarantinedBudgetFixture {
+        root: PathBuf,
+        stale_bytes: Vec<u8>,
+        protected_before: BTreeMap<PathBuf, Vec<u8>>,
+        journal: super::super::storage::ExecutionJournal,
+    }
+
+    fn read_artifact_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn visit(root: &Path, path: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            for entry in std::fs::read_dir(path).unwrap() {
+                let entry = entry.unwrap();
+                let kind = entry.file_type().unwrap();
+                assert!(
+                    !kind.is_symlink(),
+                    "disposable fixture must not contain links"
+                );
+                if kind.is_dir() {
+                    visit(root, &entry.path(), files);
+                } else {
+                    assert!(kind.is_file());
+                    files.insert(
+                        entry.path().strip_prefix(root).unwrap().to_path_buf(),
+                        std::fs::read(entry.path()).unwrap(),
+                    );
+                }
+            }
+        }
+        let mut files = BTreeMap::new();
+        visit(root, root, &mut files);
+        files
+    }
+
+    fn quarantined_budget_fixture() -> QuarantinedBudgetFixture {
+        let root = std::env::temp_dir().join(format!(
+            "supa-diska-budget-enforcement-{}-{}",
+            std::process::id(),
+            getrandom::u64().unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        copy_fixture(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-artifacts/rust"),
+            &root,
+        );
+        let cargo = std::fs::canonicalize(
+            std::env::var_os("CARGO").expect("Cargo must supply its executable for this test"),
+        )
+        .unwrap();
+        let storage = CleanupStorage::open(root.join("app-data/cleanup")).unwrap();
+        storage
+            .write_project_roots(&[super::super::storage::ProjectRoot {
+                id: "9".repeat(32),
+                display_path: root.to_string_lossy().into_owned(),
+                paused: false,
+                added_at_unix_seconds: 1,
+                last_scanned_at_unix_seconds: None,
+            }])
+            .unwrap();
+        // Only the approval prompt is substituted; builds and filesystem mutations are native.
+        let manager = BuildArtifactManager::with_components(
+            storage,
+            Arc::new(Mutex::new(())),
+            Arc::new(TestApprover {
+                approved: true,
+                seen: Mutex::new(Vec::new()),
+            }),
+            Arc::new(NativeProcessRunner),
+        );
+        assert!(!manager.policy().unwrap().enabled);
+        for label in ["release", "debug"] {
+            let mut argv = vec!["build".into(), "--offline".into()];
+            if label == "release" {
+                argv.push("--release".into());
+            }
+            let mut artifact_paths = vec![RegisteredArtifactPath {
+                relative_path: format!("target/{label}/artifact-budget-fixture.exe"),
+                role: ArtifactRole::Generation,
+            }];
+            if label == "debug" {
+                artifact_paths.extend([
+                    RegisteredArtifactPath {
+                        relative_path: "target/debug/deps".into(),
+                        role: ArtifactRole::Dependency,
+                    },
+                    RegisteredArtifactPath {
+                        relative_path: "target/debug/incremental".into(),
+                        role: ArtifactRole::Incremental,
+                    },
+                ]);
+            }
+            let profile = manager
+                .register_profile(RegisterBuildProfileInput {
+                    root_id: "9".repeat(32),
+                    display_name: label.into(),
+                    ecosystem: BuildEcosystem::Rust,
+                    executable: cargo.to_string_lossy().into_owned(),
+                    argv,
+                    working_directory: String::new(),
+                    profile_label: label.into(),
+                    toolchain_label: "test-toolchain".into(),
+                    target_label: format!("{label}-target"),
+                    rebuild_cost: RebuildCost::Low,
+                    artifact_paths,
+                })
+                .unwrap();
+            let run = manager.start_run(&profile.profile_id).unwrap();
+            assert_eq!(
+                wait_for_terminal(&manager, &run.run_id).state,
+                BuildRunState::Succeeded
+            );
+        }
+
+        let stale = root.join("target/release/artifact-budget-fixture.exe");
+        let stale_bytes = std::fs::read(&stale).unwrap();
+        assert!(!stale_bytes.is_empty());
+        let protected_root = root.join("target/debug");
+        let protected_before = read_artifact_tree(&protected_root);
+        assert!(protected_before.contains_key(Path::new("artifact-budget-fixture.exe")));
+        for directory in ["deps", "incremental"] {
+            assert!(
+                protected_before
+                    .keys()
+                    .any(|path| path.starts_with(directory))
+            );
+        }
+        let ledger_before = manager.storage.artifact_generations().unwrap();
+        let stale_id = ledger_before
+            .generations
+            .iter()
+            .find(|generation| {
+                generation.normalized_path == "target/release/artifact-budget-fixture.exe"
+            })
+            .unwrap()
+            .generation_id
+            .clone();
+        assert!(manager.storage.executions().unwrap().is_empty());
+        let mut policy = ArtifactBudgetPolicy {
+            enabled: true,
+            ..ArtifactBudgetPolicy::default()
+        };
+        policy.global_limits.maximum_allocated_bytes = Some(1);
+        assert!(
+            ledger_before
+                .generations
+                .iter()
+                .map(|item| item.allocated_bytes)
+                .sum::<u64>()
+                > 1
+        );
+
+        // Public policy application performs analysis, selection, revalidation and journaled quarantine.
+        let result = manager.set_policy(policy).unwrap();
+        assert!(result.policy_saved);
+        assert_eq!(
+            result.analysis_status,
+            ArtifactBudgetAnalysisStatus::Completed
+        );
+        assert!(!stale.exists());
+        assert_eq!(read_artifact_tree(&protected_root), protected_before);
+        let journals = manager.storage.executions().unwrap();
+        assert_eq!(journals.len(), 1);
+        let journal = &journals[0];
+        assert_eq!(
+            journal.disposition,
+            super::super::storage::CleanupDisposition::Quarantine
+        );
+        assert_eq!(journal.items.len(), 1);
+        assert_eq!(journal.items[0].state, ItemState::Quarantined);
+        assert!(journal.items[0].failure.is_none());
+        let quarantine = journal.items[0].quarantine_path.as_ref().unwrap();
+        assert!(quarantine.starts_with(root.join("app-data/cleanup")));
+        assert_eq!(std::fs::read(quarantine).unwrap(), stale_bytes);
+        assert_eq!(journal.accounting.reclaimed_bytes, 0);
+        let mut expected_ids = ledger_before
+            .generations
+            .iter()
+            .filter(|generation| generation.generation_id != stale_id)
+            .map(|generation| generation.generation_id.clone())
+            .collect::<Vec<_>>();
+        let mut retained_ids = manager
+            .storage
+            .artifact_generations()
+            .unwrap()
+            .generations
+            .into_iter()
+            .map(|generation| generation.generation_id)
+            .collect::<Vec<_>>();
+        expected_ids.sort();
+        retained_ids.sort();
+        assert_eq!(retained_ids, expected_ids);
+        QuarantinedBudgetFixture {
+            root,
+            stale_bytes,
+            protected_before,
+            journal: journal.clone(),
+        }
+    }
+
+    #[test]
+    fn real_budget_enforcement_quarantines_only_stale_artifact_and_preserves_protected_bytes() {
+        let fixture = quarantined_budget_fixture();
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn real_budget_undo_after_restart_restores_artifact_and_preserves_protected_bytes() {
+        let fixture = quarantined_budget_fixture();
+        let app_data = fixture.root.join("app-data");
+        let original = fixture
+            .root
+            .join("target/release/artifact-budget-fixture.exe");
+        let protected = fixture.root.join("target/debug");
+        let quarantine = fixture.journal.items[0].quarantine_path.as_ref().unwrap();
+        let service = super::super::execution::CleanupService::new(app_data.clone()).unwrap();
+        let history = service.history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].execution_id, fixture.journal.execution_id);
+        assert_eq!(history[0].items[0].state, ItemState::Quarantined);
+        drop(service);
+
+        // Reopen persisted plans and journals; no live manager or service state is reused.
+        let service = super::super::execution::CleanupService::new(app_data.clone()).unwrap();
+        assert!(!original.exists());
+        assert_eq!(std::fs::read(quarantine).unwrap(), fixture.stale_bytes);
+        assert_eq!(read_artifact_tree(&protected), fixture.protected_before);
+        let restored = service.undo(&fixture.journal.execution_id).unwrap();
+        assert_eq!(restored.items.len(), 1);
+        assert_eq!(restored.items[0].state, ItemState::Restored);
+        assert!(restored.items[0].failure.is_none());
+        assert_eq!(std::fs::read(&original).unwrap(), fixture.stale_bytes);
+        assert!(!quarantine.exists());
+        assert_eq!(read_artifact_tree(&protected), fixture.protected_before);
+        drop(service);
+
+        let storage = CleanupStorage::open(app_data.join("cleanup")).unwrap();
+        let persisted = storage
+            .read_execution(&fixture.journal.execution_id)
+            .unwrap();
+        assert_eq!(persisted.items[0].state, ItemState::Restored);
+        assert!(persisted.items[0].failure.is_none());
+        drop(storage);
+        std::fs::remove_dir_all(fixture.root).unwrap();
+    }
+
     #[test]
     fn real_warm_cargo_build_keeps_debug_and_incremental_state() {
         let root = std::env::temp_dir().join(format!(
