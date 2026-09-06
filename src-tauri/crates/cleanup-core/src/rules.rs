@@ -67,13 +67,42 @@ pub enum TargetType {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ArtifactEcosystem {
+    Rust,
     NodeJs,
+    NextJs,
+    Angular,
+    Nuxt,
+    Vite,
+    SvelteKit,
+    Astro,
+    Python,
+    DotNet,
+    Gradle,
+    Maven,
+    Cmake,
+    Unity,
+    Unreal,
+    Godot,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ArtifactType {
     InstalledDependencies,
+    BuildOutput,
+    CompilerCache,
+    FrameworkCache,
+    VirtualEnvironment,
+    TestCache,
+    GeneratedIntermediate,
+    ImportedAssetCache,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Confidence {
+    High,
+    Medium,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -85,7 +114,17 @@ pub enum Recoverability {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RebuildConsequence {
+    LocalRebuild,
     NetworkDownloadRequired,
+    ToolchainRequired,
+    ExpensiveReimport,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Activity {
+    Idle,
+    InUse,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -93,6 +132,7 @@ pub enum RebuildConsequence {
 pub struct ArtifactIntelligence {
     pub ecosystem: ArtifactEcosystem,
     pub artifact_type: ArtifactType,
+    pub confidence: Confidence,
     pub recoverability: Recoverability,
     pub rebuild_consequence: RebuildConsequence,
 }
@@ -119,6 +159,8 @@ pub struct Markers {
     pub all: Vec<String>,
     #[serde(default)]
     pub any: Vec<String>,
+    #[serde(default)]
+    pub any_suffix: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -136,7 +178,12 @@ pub struct CleanupRule {
     pub roots: Vec<RuleRoot>,
     #[serde(default)]
     pub markers: Markers,
+    #[serde(default)]
     pub targets: Vec<String>,
+    #[serde(default)]
+    pub target_prefixes: Vec<String>,
+    #[serde(default)]
+    pub target_suffixes: Vec<String>,
     pub target_type: TargetType,
     pub root_depth: u16,
     #[serde(default)]
@@ -259,9 +306,18 @@ fn validate(source: SourceCatalog, limits: CatalogLimits) -> Result<RuleCatalog,
                 return invalid("duplicate normalized root");
             }
         }
-        names(&rule.targets, limits, "targets", false)?;
+        names(&rule.targets, limits, "targets", true)?;
+        patterns(&rule.target_prefixes, limits, "targetPrefixes")?;
+        patterns(&rule.target_suffixes, limits, "targetSuffixes")?;
+        if rule.targets.is_empty()
+            && rule.target_prefixes.is_empty()
+            && rule.target_suffixes.is_empty()
+        {
+            return invalid("rules require a target matcher");
+        }
         names(&rule.markers.all, limits, "markers.all", true)?;
         names(&rule.markers.any, limits, "markers.any", true)?;
+        patterns(&rule.markers.any_suffix, limits, "markers.anySuffix")?;
         names(&rule.excluded_names, limits, "excludedNames", true)?;
         if rule.excluded_paths.len() > limits.max_excluded_paths {
             return invalid("too many excluded paths");
@@ -285,6 +341,7 @@ fn validate(source: SourceCatalog, limits: CatalogLimits) -> Result<RuleCatalog,
             ScannerKind::Direct
                 if !rule.markers.all.is_empty()
                     || !rule.markers.any.is_empty()
+                    || !rule.markers.any_suffix.is_empty()
                     || rule.project_depth.is_some()
                     || rule.target_depth.is_some()
                     || rule.artifact.is_some() =>
@@ -292,7 +349,9 @@ fn validate(source: SourceCatalog, limits: CatalogLimits) -> Result<RuleCatalog,
                 return invalid("direct scanner cannot define project fields");
             }
             ScannerKind::ProjectArtifacts
-                if rule.markers.all.is_empty() && rule.markers.any.is_empty() =>
+                if rule.markers.all.is_empty()
+                    && rule.markers.any.is_empty()
+                    && rule.markers.any_suffix.is_empty() =>
             {
                 return invalid("projectArtifacts requires markers");
             }
@@ -328,6 +387,21 @@ fn name(value: &str, limits: CatalogLimits, field: &str) -> Result<(), CatalogEr
     }
     Ok(())
 }
+fn patterns(
+    values: &[String],
+    limits: CatalogLimits,
+    field: &'static str,
+) -> Result<(), CatalogError> {
+    names(values, limits, field, true)?;
+    if values
+        .iter()
+        .any(|value| value.contains('*') || value.contains('?'))
+    {
+        return invalid("pattern fields contain literals, not wildcard syntax");
+    }
+    Ok(())
+}
+
 fn names(
     values: &[String],
     limits: CatalogLimits,

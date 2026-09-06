@@ -64,7 +64,9 @@ The complete inventory is classified as standard-user, mixed, or helper-only in 
 
 Manual temporary-cache cleanup is implemented at standard integrity with opaque Rust-owned plans, final containment revalidation, Windows Recycle Bin undo, app quarantine, delayed opt-in purge, and separate permanent confirmation. No privileged or arbitrary-path delete, command, registry, service, or shell operation is exposed.
 
-Phase 5 project discovery is partial: one explicit root can produce read-only intelligence for marker-backed Node.js `node_modules`. Rust, Python, .NET, Gradle/Java, CMake, framework-specific, game-engine, saved-root, whole-drive, selection, and project-artifact cleanup behavior remain unimplemented. This narrow slice is not ecosystem-complete parity.
+Coding-project discovery is implemented as an original read-only extension, not a Kudu-equivalence claim. Explicit saved roots, ID-only management, marker-aware rules for Rust, Node and major frameworks, Python, .NET, Gradle/Maven, CMake, Unity, Unreal, and Godot, nested-project handling, typed rebuild intelligence, aggregate bounds, and conservative unselected results are covered in the [project artifact guide](project-artifacts.md). Project-artifact selection and cleanup remain deliberately unreachable.
+
+Post-build artifact budgets are another original standard-integrity extension, not a Kudu-equivalence claim. Native-approved executable profiles, immutable argv, success-only ownership, stale generation budgets, conservative external analysis, protected incremental state, journaled quarantine, and undo are documented in [build artifact budgets](build-artifact-budgets.md). No build or artifact operation is added to the privileged helper.
 
 ## Updating this contract
 

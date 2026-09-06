@@ -17,6 +17,18 @@ fn direct(id: &str, binding: &str, targets: &str, excluded: &str) -> String {
         r#"{{"id":"{id}","ruleVersion":1,"lifecycle":"verified","risk":"safe","provenance":{{"source":"test","verifiedAt":"2026-08-30"}},"defaultSelected":false,"scanner":"direct","roots":[{{"binding":"{binding}","suffix":""}}],"markers":{{}},"targets":[{targets}],"targetType":"directory","rootDepth":12,"minimumAgeSeconds":1,"excludedNames":[{excluded}],"excludedPaths":[]}}"#
     )
 }
+fn project(id: &str, markers: &str, targets: &str) -> String {
+    project_matchers(
+        id,
+        &format!(r#""all":[{markers}],"any":[]"#),
+        &format!(r#""targets":[{targets}]"#),
+    )
+}
+fn project_matchers(id: &str, marker_fields: &str, target_fields: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{{"source":"test","verifiedAt":"2026-08-30"}},"defaultSelected":false,"artifact":{{"ecosystem":"nodeJs","artifactType":"buildOutput","confidence":"high","recoverability":"rebuildable","rebuildConsequence":"localRebuild"}},"scanner":"projectArtifacts","roots":[{{"binding":"root","suffix":""}}],"markers":{{{marker_fields}}},{target_fields},"targetType":"directory","rootDepth":8,"projectDepth":8,"targetDepth":4,"minimumAgeSeconds":0,"excludedNames":[".git"],"excludedPaths":[]}}"#
+    )
+}
 fn complete_policy(fs: &FixtureFs) -> ProtectionPolicy {
     let configured = PathBuf::from(r"C:\ConfiguredProtection");
     fs.directory(&configured);
@@ -344,12 +356,13 @@ fn project_artifacts_snapshot_retains_complete_mutation_validation_proof() {
     fs.file(r"C:\work\app\package.json", 1);
     fs.directory(r"C:\work\app\node_modules");
     fs.file(r"C:\work\app\node_modules\data", 9);
-    let rule = r#"{"id":"projects","ruleVersion":3,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":true,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":3,"targetDepth":2,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    fs.make_active(r"C:\work\app\node_modules");
+    let rule = r#"{"id":"projects","ruleVersion":3,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":true,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","confidence":"high","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":3,"targetDepth":2,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
     let rules = catalog(rule);
     let policy = complete_policy(fs.as_ref());
 
     let result = run(
-        &ScanEngine::new(fs),
+        &ScanEngine::new(fs.clone()),
         &rules,
         &["projects"],
         &bindings(&[("root", r"C:\work")]),
@@ -362,6 +375,8 @@ fn project_artifacts_snapshot_retains_complete_mutation_validation_proof() {
     assert_eq!(record.project_name.as_deref(), Some("app"));
     assert_eq!(record.project_path.as_deref(), Some(r"C:\work\app"));
     assert_eq!(record.bytes, 9);
+    assert_eq!(record.activity, Some(Activity::InUse));
+    assert!(record.age_seconds.is_some_and(|age| age > 1));
     assert_eq!(record.risk, Some(Risk::Recoverable));
     assert_eq!(record.default_selected, Some(true));
     assert_eq!(
@@ -373,6 +388,7 @@ fn project_artifacts_snapshot_retains_complete_mutation_validation_proof() {
         serde_json::json!({
             "ecosystem": "nodeJs",
             "artifactType": "installedDependencies",
+            "confidence": "high",
             "recoverability": "rebuildable",
             "rebuildConsequence": "networkDownloadRequired"
         })
@@ -391,6 +407,10 @@ fn project_artifacts_snapshot_retains_complete_mutation_validation_proof() {
             .scanned_at
             .duration_since(std::time::UNIX_EPOCH)
             .is_ok()
+    );
+    assert_eq!(
+        revalidate_candidate(fs.as_ref(), proof, &policy, std::time::SystemTime::now()),
+        Err(CandidateRejection::Active)
     );
 }
 
@@ -484,7 +504,7 @@ fn project_artifacts_markers_age_and_exclusions_are_honored() {
     fs.file(r"C:\work\app\node_modules\x", 3);
     fs.directory(r"C:\work\unmarked");
     fs.directory(r"C:\work\unmarked\node_modules");
-    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":true,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":3,"targetDepth":2,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":true,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","confidence":"high","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":3,"targetDepth":2,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
     let rules = catalog(rule);
     let policy = complete_policy(fs.as_ref());
     let result = run(
@@ -506,19 +526,132 @@ fn project_artifacts_markers_age_and_exclusions_are_honored() {
 }
 
 #[test]
+fn generic_names_require_markers_and_matchers_share_revalidation() {
+    let fs = Arc::new(FixtureFs::new());
+    fs.directory(r"C:\work");
+    for name in ["target", "build", "out", "Library", "outputs"] {
+        fs.directory(Path::new(r"C:\work").join(name));
+    }
+    fs.directory(r"C:\work\dotnet");
+    fs.file(r"C:\work\dotnet\app.csproj", 1);
+    fs.directory(r"C:\work\dotnet\bin");
+    fs.directory(r"C:\work\cmake");
+    fs.file(r"C:\work\cmake\CMakeLists.txt", 1);
+    fs.directory(r"C:\work\cmake\cmake-build-debug");
+    fs.directory(r"C:\work\python");
+    fs.file(r"C:\work\python\pyproject.toml", 1);
+    fs.directory(r"C:\work\python\sample.egg-info");
+    let rules = catalog(
+        &[
+            project_matchers(
+                "dotnet",
+                r#""all":[],"any":[],"anySuffix":[".csproj"]"#,
+                r#""targets":["bin"]"#,
+            ),
+            project_matchers(
+                "cmake",
+                r#""all":["CMakeLists.txt"],"any":[]"#,
+                r#""targets":[],"targetPrefixes":["cmake-build-"]"#,
+            ),
+            project_matchers(
+                "python",
+                r#""all":[],"any":["pyproject.toml"]"#,
+                r#""targets":[],"targetSuffixes":[".egg-info"]"#,
+            ),
+        ]
+        .join(","),
+    );
+    let policy = complete_policy(fs.as_ref());
+
+    let result = run(
+        &ScanEngine::new(fs.clone()),
+        &rules,
+        &["dotnet", "cmake", "python"],
+        &bindings(&[("root", r"C:\work")]),
+        &policy,
+        ScanLimits::default(),
+        &CounterEntropy::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.snapshot.records().len(),
+        3,
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(result.snapshot.records().iter().all(|record| {
+        !["target", "build", "out", "Library", "outputs"]
+            .iter()
+            .any(|name| record.display_path.ends_with(name))
+    }));
+    for record in result.snapshot.records() {
+        assert!(
+            revalidate_candidate(
+                fs.as_ref(),
+                result.snapshot.resolve(&record.id).unwrap(),
+                &policy,
+                std::time::SystemTime::now(),
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
+fn project_artifact_age_handles_missing_and_future_timestamps() {
+    let fs = Arc::new(FixtureFs::new());
+    fs.directory(r"C:\work");
+    for project_name in ["missing", "future"] {
+        let project = Path::new(r"C:\work").join(project_name);
+        fs.directory(&project);
+        fs.file(project.join("package.json"), 1);
+        fs.directory(project.join("build"));
+    }
+    fs.set_modified(Path::new(r"C:\work\missing\build"), None);
+    fs.set_modified(
+        Path::new(r"C:\work\future\build"),
+        Some(std::time::SystemTime::now() + std::time::Duration::from_secs(86_400)),
+    );
+    let rules = catalog(&project("build", "\"package.json\"", "\"build\""));
+    let policy = complete_policy(fs.as_ref());
+
+    let result = run(
+        &ScanEngine::new(fs),
+        &rules,
+        &["build"],
+        &bindings(&[("root", r"C:\work")]),
+        &policy,
+        ScanLimits::default(),
+        &CounterEntropy::default(),
+    )
+    .unwrap();
+    let ages: HashMap<_, _> = result
+        .snapshot
+        .records()
+        .iter()
+        .map(|record| (record.project_name.as_deref().unwrap(), record.age_seconds))
+        .collect();
+    assert_eq!(ages["missing"], None);
+    assert_eq!(ages["future"], Some(0));
+}
+
+#[test]
 fn nested_project_artifacts_are_ordered_without_duplicates() {
     let fs = Arc::new(FixtureFs::new());
     fs.directory(r"C:\work");
     fs.directory(r"C:\work\app");
+    fs.directory(r"C:\work\app\.git");
     fs.file(r"C:\work\app\package.json", 1);
     fs.directory(r"C:\work\app\node_modules");
     fs.file(r"C:\work\app\node_modules\app.bin", 3);
     fs.directory(r"C:\work\app\packages");
     fs.directory(r"C:\work\app\packages\child");
+    fs.directory(r"C:\work\app\packages\child\.git");
     fs.file(r"C:\work\app\packages\child\package.json", 1);
     fs.directory(r"C:\work\app\packages\child\node_modules");
     fs.file(r"C:\work\app\packages\child\node_modules\child.bin", 5);
-    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":false,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":4,"targetDepth":0,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":false,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","confidence":"high","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":4,"targetDepth":0,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
     let rules = catalog(rule);
     let policy = complete_policy(fs.as_ref());
 
@@ -548,6 +681,49 @@ fn nested_project_artifacts_are_ordered_without_duplicates() {
 }
 
 #[test]
+fn cross_rule_duplicates_and_parent_child_artifacts_are_suppressed() {
+    let fs = Arc::new(FixtureFs::new());
+    fs.directory(r"C:\work");
+    fs.directory(r"C:\work\app");
+    fs.file(r"C:\work\app\package.json", 1);
+    fs.directory(r"C:\work\app\build");
+    fs.directory(r"C:\work\app\build\cache");
+    fs.file(r"C:\work\app\build\cache\data", 7);
+    let rules = catalog(
+        &[
+            project("build-a", "\"package.json\"", "\"build\""),
+            project("build-b", "\"package.json\"", "\"build\""),
+            project("cache", "\"package.json\"", "\"cache\""),
+        ]
+        .join(","),
+    );
+    let policy = complete_policy(fs.as_ref());
+
+    let result = run(
+        &ScanEngine::new(fs),
+        &rules,
+        &["build-a", "build-b", "cache"],
+        &bindings(&[("root", r"C:\work")]),
+        &policy,
+        ScanLimits::default(),
+        &CounterEntropy::default(),
+    )
+    .unwrap();
+
+    assert_eq!(result.snapshot.records().len(), 1);
+    assert!(result.snapshot.records()[0].display_path.ends_with("build"));
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.reason == DiagnosticReason::Overlap && diagnostic.path.ends_with("cache")
+    }));
+}
+
+#[test]
+fn nested_repositories_and_monorepos_avoid_duplicate_or_parent_child_destructive_overlap() {
+    nested_project_artifacts_are_ordered_without_duplicates();
+    cross_rule_duplicates_and_parent_child_artifacts_are_suppressed();
+}
+
+#[test]
 fn project_artifacts_matched_tree_is_measured_but_not_searched_for_projects() {
     let fs = Arc::new(FixtureFs::new());
     fs.directory(r"C:\work");
@@ -562,7 +738,7 @@ fn project_artifacts_matched_tree_is_measured_but_not_searched_for_projects() {
         r"C:\work\app\node_modules\dependency\node_modules\nested.bin",
         5,
     );
-    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":false,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":4,"targetDepth":0,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":false,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","confidence":"high","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":4,"targetDepth":0,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
     let rules = catalog(rule);
     let policy = complete_policy(fs.as_ref());
 
@@ -593,7 +769,7 @@ fn project_artifacts_links_and_visit_limits_fail_closed() {
     fs.directory(r"C:\work\app\node_modules");
     fs.file(r"C:\work\app\node_modules\dependency.bin", 3);
     fs.link(r"C:\work\linked-project");
-    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":false,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":4,"targetDepth":0,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
+    let rule = r#"{"id":"projects","ruleVersion":1,"lifecycle":"stable","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-08-30"},"defaultSelected":false,"artifact":{"ecosystem":"nodeJs","artifactType":"installedDependencies","confidence":"high","recoverability":"rebuildable","rebuildConsequence":"networkDownloadRequired"},"scanner":"projectArtifacts","roots":[{"binding":"root","suffix":""}],"markers":{"all":["package.json"],"any":[]},"targets":["node_modules"],"targetType":"directory","rootDepth":4,"projectDepth":4,"targetDepth":0,"minimumAgeSeconds":1,"excludedNames":[],"excludedPaths":[]}"#;
     let rules = catalog(rule);
     let policy = complete_policy(fs.as_ref());
 

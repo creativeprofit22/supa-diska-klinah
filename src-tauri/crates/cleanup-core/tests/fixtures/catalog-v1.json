@@ -28,13 +28,20 @@
       "artifact": {
         "ecosystem": "nodeJs",
         "artifactType": "installedDependencies",
+        "confidence": "medium",
         "recoverability": "rebuildable",
         "rebuildConsequence": "networkDownloadRequired"
       },
       "scanner": "projectArtifacts",
       "roots": [{ "binding": "profile", "suffix": "source" }],
-      "markers": { "all": ["package.json"], "any": ["package-lock.json", "pnpm-lock.yaml"] },
+      "markers": {
+        "all": ["package.json"],
+        "any": ["package-lock.json", "pnpm-lock.yaml"],
+        "anySuffix": [".workspace.json"]
+      },
       "targets": ["node_modules"],
+      "targetPrefixes": ["generated-"],
+      "targetSuffixes": [".cache-dir"],
       "targetType": "directory",
       "rootDepth": 8,
       "projectDepth": 6,

@@ -27,9 +27,11 @@ cleanup-core (portable contracts)
 
 The scan engine accepts caller-resolved absolute root bindings and a complete protection policy. Independent `direct` and `projectArtifacts` scanners share bounded traversal contracts. Rust-owned snapshots resolve opaque candidate IDs into immutable persisted plans. `windows-platform` serializes final validation, Recycle Bin, quarantine, permanent deletion, undo, purge, journals, and accounting; Tauri never receives a mutation path.
 
-Project artifact discovery is a deliberately separate read-only projection. Its Windows adapter accepts one bounded untrusted root, applies the existing no-follow filesystem, canonical containment, reparse rejection, complete protection policy, and fixed scan limits, then returns enriched display records and bounded diagnostics. It immediately drops the private snapshot, so discovery cannot supply an identifier to plan creation or deletion.
+Project artifact discovery is a deliberately separate read-only projection. `windows-platform` persists at most 32 canonical roots in an app-owned atomic registry, while `cleanup-core` applies marker-aware ecosystem rules, no-follow traversal, identity checks, containment within the selected root and project context, bounded measurement, exact deduplication, and parent-child overlap suppression. All-root scans collapse covered child roots and divide aggregate budgets before scanning sequentially. Every private discovery snapshot is dropped, so discovery returns no identifier usable by plan creation or deletion. See the [project artifact guide](project-artifacts.md).
 
-`scripts/check-architecture.mjs` reads locked Cargo metadata and rejects any other workspace edge. It also rejects runtime `std::process::Command` and Tauri dependencies outside the application.
+The opt-in build artifact coordinator is a separate trust grant layered on saved root IDs. `cleanup-core` owns exact-path snapshots, protection reasons, deterministic age and size selection, and protected-byte floors. `windows-platform` owns native approval, executable identity, immutable argv launch, in-memory runs, atomic success ledgers, conservative external observations, and artifact-plan reconstruction. Artifact plans reuse the same final revalidator, serialized writer, pre-mutation journal, quarantine, undo, and purge path. The privileged helper has no build or artifact operation. See [build artifact budgets](build-artifact-budgets.md).
+
+`scripts/check-architecture.mjs` reads locked Cargo metadata and rejects any other workspace edge. It allows runtime `std::process::Command` only in the build artifact coordinator and rejects Tauri dependencies outside the application.
 
 ## Frontend ownership
 
@@ -38,21 +40,22 @@ app/router
   -> feature route exports
   -> shared AppShell
 
-features/dashboard -> its API adapter and status state
-features/cleanup   -> preview, plan, execution, undo, and history state
-features/settings  -> persisted automatic-cleanup policy state
-shared             -> no app or feature imports
+features/dashboard       -> its API adapter and status state
+features/cleanup         -> preview, plan, execution, undo, history, and artifact coordinator composition
+features/build-artifacts -> typed build APIs, polling state, and reusable budget surfaces
+features/settings        -> persisted cleanup and artifact-budget policy composition
+shared                   -> no app or feature imports
 ```
 
-A feature may import its own files and shared code. It cannot import another feature or the app composition layer. Shared code cannot import app or feature code. The architecture check resolves local TypeScript imports and enforces these rules.
+A feature normally imports only its own files and shared code. The explicit build-artifact bridge is limited to the Cleanup and Settings composition files plus existing project-root display adapters; the architecture check pins those exact imports. Shared code cannot import app or feature code.
 
 The hash router keeps packaged navigation independent of an HTTP fallback. Route composition belongs to `src/app`; API adapters, state, pages, and route objects belong to their feature.
 
 ## Tauri capability boundary
 
-The application exposes foundation and restore-point commands plus cleanup preview, read-only project discovery, plan creation, safe execution, separate permanent execution, undo, history, and automatic-policy commands. The only path-input exception is `discover_project_artifacts`: the local webview may submit one bounded root string solely to the read-only adapter. Mutation commands still accept only bounded opaque identifiers, dispositions, and policy values; they accept no paths, roots, rules, limits, protection policy, or deletion primitives. `build.rs`, `generate_handler!`, and `capabilities/main.json` contain the same command set for the local Windows `main` webview only.
+The application exposes foundation and restore-point commands plus cleanup preview, project-root list/add/pause/remove/discovery, plan creation, safe execution, separate permanent execution, undo, history, automatic-policy commands, and build profile/run/artifact-budget commands. Build profile registration accepts typed data and invokes native confirmation. Later start, get, cancel, remove, and preview operations accept opaque IDs or bounded policy values; runtime launch commands accept no executable, argv, environment, working directory, artifact path, or deletion primitive. `build.rs`, `generate_handler!`, and `capabilities/main.json` contain the same command set for the local Windows `main` webview only.
 
-Production navigation allows only the packaged Tauri origin. Development additionally allows exactly `http://127.0.0.1:1420`. Content security policies are explicit, asset protocol is disabled, and no shell, filesystem, process, dialog, or updater plugin is granted. The main window is created hidden and unfocused; startup policy shows and focuses it only for foreground launches, preventing minimized launches from flashing or taking focus. The main executable is `asInvoker` and rejects an elevated token before constructing Tauri. Only the separately packaged helper requests UAC.
+Production navigation allows only the packaged Tauri origin. Development additionally allows exactly `http://127.0.0.1:1420`. Content security policies are explicit, asset protocol is disabled, and no generic shell, filesystem, process, dialog, or updater plugin is granted. One reviewed standard-integrity coordinator launches only natively approved canonical `.exe` profiles through `Command::new(executable).args(argv)` with disconnected streams. The main window is created hidden and unfocused; startup policy shows and focuses it only for foreground launches. The main executable is `asInvoker` and rejects an elevated token before constructing Tauri. Only the separately packaged helper requests UAC.
 
 Adding a command requires all of the following:
 

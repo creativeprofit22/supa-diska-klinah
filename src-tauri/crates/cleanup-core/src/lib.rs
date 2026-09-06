@@ -1,9 +1,11 @@
+mod build_artifacts;
 mod engine;
 mod filesystem;
 mod protection;
 mod rules;
 mod scanner;
 
+pub use build_artifacts::*;
 pub use engine::*;
 pub use filesystem::*;
 pub use protection::*;

@@ -93,6 +93,16 @@ const rustRoots = [
   resolve(root, "src-tauri/src"),
   resolve(root, "src-tauri/crates"),
 ];
+const approvedProcessOwner = resolve(
+  root,
+  "src-tauri/crates/windows-platform/src/cleanup/build_artifacts.rs",
+);
+// Only the #[cfg(test)] cancellation tests copy/compile this standalone fixture.
+// Keep this exception exact: other tests, fixtures, and production files stay checked.
+const approvedProcessFixture = resolve(
+  root,
+  "src-tauri/crates/windows-platform/tests/fixtures/native-process-tree.rs",
+);
 function rustFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = resolve(directory, entry.name);
@@ -103,7 +113,11 @@ function rustFiles(directory) {
 for (const directory of rustRoots) {
   for (const file of rustFiles(directory)) {
     const source = readFileSync(file, "utf8");
-    if (/std::process::Command|Command::new/.test(source)) {
+    if (
+      /std::process::Command|Command::new/.test(source) &&
+      resolve(file) !== approvedProcessOwner &&
+      resolve(file) !== approvedProcessFixture
+    ) {
       fail(`${relative(root, file)} contains forbidden runtime process execution`);
     }
   }
@@ -118,7 +132,8 @@ function sourceFiles(directory) {
 }
 
 function resolveImport(fromFile, specifier) {
-  const base = resolve(dirname(fromFile), specifier);
+  // Vite's raw-text suffix does not change the file's existence or boundary ownership.
+  const base = resolve(dirname(fromFile), specifier.replace(/\?raw$/, ""));
   const candidates = extname(base)
     ? [base]
     : [base, `${base}.ts`, `${base}.tsx`, resolve(base, "index.ts"), resolve(base, "index.tsx")];
@@ -132,6 +147,16 @@ function area(path) {
 }
 
 const importPattern = /(?:import|export)\s+(?:[^'\"]*?\s+from\s+)?["']([^"']+)["']/g;
+const approvedFeatureBridges = new Set([
+  "src/features/build-artifacts/ArtifactBudgetSettings.tsx->src/features/cleanup/api/previewCleanup.ts",
+  "src/features/build-artifacts/BuildArtifactCoordinator.tsx->src/features/cleanup/api/previewCleanup.ts",
+  "src/features/build-artifacts/BuildArtifactCoordinator.tsx->src/features/cleanup/format.ts",
+  // Reuse the cleanup API's project-root registry, like the coordinator/settings consumers above.
+  // Only this hook-to-API edge is approved, not the surrounding features.
+  "src/features/build-artifacts/useProjectRoots.ts->src/features/cleanup/api/previewCleanup.ts",
+  "src/features/cleanup/CleanupPreviewPage.tsx->src/features/build-artifacts/BuildArtifactCoordinator.tsx",
+  "src/features/settings/SettingsPage.tsx->src/features/build-artifacts/ArtifactBudgetSettings.tsx",
+]);
 
 for (const file of sourceFiles(sourceRoot)) {
   const from = area(file);
@@ -141,13 +166,15 @@ for (const file of sourceFiles(sourceRoot)) {
     const target = resolveImport(file, specifier);
     if (!target) fail(`${relative(root, file)} imports missing local module ${specifier}`);
     const to = area(target);
+    const bridge = `${relative(root, file).split(sep).join("/")}->${relative(root, target).split(sep).join("/")}`;
 
     if (from.kind === "shared" && (to.kind === "feature" || to.kind === "app")) {
       fail(`${relative(root, file)} crosses from shared into ${to.kind}`);
     }
     if (
       from.kind === "feature" &&
-      (to.kind === "app" || (to.kind === "feature" && to.name !== from.name))
+      (to.kind === "app" || (to.kind === "feature" && to.name !== from.name)) &&
+      !approvedFeatureBridges.has(bridge)
     ) {
       fail(`${relative(root, file)} crosses its feature boundary`);
     }

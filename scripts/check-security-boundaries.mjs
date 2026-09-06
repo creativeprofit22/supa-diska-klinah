@@ -20,6 +20,11 @@ const commandSource = read("src-tauri/src/commands/security.rs");
 const brokerSource = read("src-tauri/crates/windows-platform/src/security/broker.rs");
 const helperSource = read("src-tauri/crates/windows-platform/src/security/helper.rs");
 const protocolSource = read("src-tauri/crates/windows-platform/src/security/protocol.rs");
+const buildArtifactCommands = read("src-tauri/src/commands/build_artifacts.rs");
+const buildArtifactCoordinator = read(
+  "src-tauri/crates/windows-platform/src/cleanup/build_artifacts.rs",
+);
+const frontendBuildArtifactApi = read("src/features/build-artifacts/api.ts");
 const ciWorkflow = read(".github/workflows/ci.yml");
 const nativeSmokeCi = read("scripts/smoke-native-ci.ps1");
 const releaseSigning = read("scripts/prepare-windows-signing.ps1");
@@ -172,6 +177,46 @@ if (
   !/PrivilegedOperation::CreateSystemRestorePoint/.test(helperSource)
  ) {
   fail("helper authentication, bounds, timeouts, or operation allowlist drifted");
+}
+
+if (
+  !/Command::new\(executable\)[\s\S]*?\.args\(argv\)/.test(buildArtifactCoordinator) ||
+  !/stdin\(Stdio::null\(\)\)/.test(buildArtifactCoordinator) ||
+  !/stdout\(Stdio::null\(\)\)/.test(buildArtifactCoordinator) ||
+  !/stderr\(Stdio::null\(\)\)/.test(buildArtifactCoordinator) ||
+  /Command::new\([^)]*(?:cmd|powershell|pwsh)|\.arg\(["']\/(?:C|c)["']\)/.test(
+    buildArtifactCoordinator,
+  )
+ ) {
+  fail("build profiles must launch fixed executables with argv and disconnected streams");
+}
+const startCommand = buildArtifactCommands.slice(
+  buildArtifactCommands.indexOf("fn start_build_run"),
+  buildArtifactCommands.indexOf("fn get_build_run"),
+);
+if (
+  !startCommand ||
+  /argv|argument|executable|working_directory/.test(startCommand) ||
+  /format!|to_string_lossy|std::io::Error|ChildStdout|ChildStderr/.test(buildArtifactCommands) ||
+  /build_artifact|BuildProfile|ProcessRunner|Command::new/.test(helperSource)
+ ) {
+  fail("runtime build commands or privileged helper crossed the approved profile boundary");
+}
+
+const registrationAdapter = frontendBuildArtifactApi.slice(
+  frontendBuildArtifactApi.indexOf("export const registerBuildProfile"),
+  frontendBuildArtifactApi.indexOf("export const startBuildRun"),
+);
+const policyWriteAdapter = frontendBuildArtifactApi.slice(
+  frontendBuildArtifactApi.indexOf("export const setArtifactBudgetPolicy"),
+  frontendBuildArtifactApi.indexOf("export const previewArtifactBudgets"),
+);
+if (
+  !frontendBuildArtifactApi.includes("__SUPA_ARTIFACT_SMOKE__") ||
+  /smokeAdapter/.test(registrationAdapter) ||
+  /smokeAdapter/.test(policyWriteAdapter)
+ ) {
+  fail("native smoke may simulate read/run states but never registration or policy mutation");
 }
 
 console.log(focusMessages[focus]);

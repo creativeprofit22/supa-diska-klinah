@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { BuildArtifactCoordinator } from "../build-artifacts/BuildArtifactCoordinator";
 import type { CleanupExecutionSummary, PreviewRecord } from "./api/previewCleanup";
 import { formatBytes, formatModified } from "./format";
 import { useCleanupPreview } from "./model/useCleanupPreview";
@@ -120,6 +121,7 @@ export function CleanupPreviewPage() {
         </section>
       )}
       <ProjectArtifactDiscovery />
+      <BuildArtifactCoordinator />
     </section>
   );
 }

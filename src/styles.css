@@ -510,7 +510,16 @@ h2 {
 
 .danger-button {
   border-color: var(--danger);
-  color: var(--danger);
+  color: #21100f;
+  background: var(--danger);
+}
+
+.danger-button:hover {
+  background: #ffc9c4;
+}
+
+.danger-button:active {
+  background: #f3948c;
 }
 
 dialog {
@@ -589,15 +598,13 @@ dialog::backdrop {
   align-items: end;
 }
 
-.project-artifacts-header h2,
-.project-artifacts-header p,
-.project-artifact-status p,
-.project-artifact-records h3,
-.project-artifact-records p {
-  margin-block: 0;
+.project-artifacts :is(h2, h3, h4, p) {
+  margin-block-start: 0;
 }
 
 .project-artifacts-header > p,
+.project-root-manager > p,
+.project-root-details small,
 .project-artifact-status,
 .project-artifact-diagnostics,
 .project-artifact-path {
@@ -615,8 +622,11 @@ dialog::backdrop {
   font-weight: 700;
 }
 
-.project-artifact-form-row {
+.project-artifact-form-row,
+.project-root-manager-heading,
+.project-root-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
 }
 
@@ -631,40 +641,105 @@ dialog::backdrop {
   background: var(--surface);
 }
 
-.project-artifact-status {
-  min-height: 2.75rem;
-  padding-block-start: 0.75rem;
+.project-artifact-error {
+  margin-block-start: 1rem;
+  padding-inline-start: 1rem;
+  border-inline-start: 0.25rem solid var(--danger);
+  color: var(--danger);
 }
 
-.project-artifact-status button {
-  margin-block-start: 0.75rem;
+.project-root-manager {
+  margin-block-start: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: var(--surface);
+}
+
+.project-root-manager-heading {
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-block-end: 1px solid var(--border);
+}
+
+.project-root-manager-heading h3,
+.project-root-list,
+.project-artifact-groups,
+.project-artifact-records {
+  margin: 0;
+}
+
+.project-root-list,
+.project-artifact-groups,
+.project-artifact-records {
+  padding: 0;
+  list-style: none;
+}
+
+.project-root-list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-block-end: 1px solid var(--border);
+}
+
+.project-root-details {
+  min-width: 0;
+}
+
+.project-root-details > * {
+  display: block;
+}
+
+.project-root-actions {
+  align-content: start;
+}
+
+.project-root-note {
+  padding: 1rem 1.25rem 0;
+}
+
+.project-artifact-status {
+  min-height: 2.75rem;
+  padding-block-start: 1rem;
 }
 
 .project-artifact-diagnostics {
   margin-block: 0.5rem 0;
 }
 
-.project-artifact-records {
-  margin: 1rem 0 0;
-  padding: 0;
+.project-artifact-groups {
+  margin-block-start: 1rem;
   border: 1px solid var(--border);
   border-radius: 0.625rem;
-  list-style: none;
   overflow: hidden;
+}
+
+.project-artifact-groups > li + li {
+  border-block-start: 1px solid var(--border);
+}
+
+.project-artifact-groups > li > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+}
+
+.project-artifact-groups header > div {
+  min-width: 0;
 }
 
 .project-artifact-records > li {
   min-width: 0;
   padding: 1.25rem;
-  border-block-end: 1px solid var(--border);
-}
-
-.project-artifact-records > li:last-child {
-  border-block-end: 0;
+  border-block-start: 1px solid var(--border);
 }
 
 .project-artifact-path {
-  margin-block-start: 0.3rem;
+  margin-block-end: 0;
   overflow-wrap: anywhere;
 }
 
@@ -688,6 +763,205 @@ dialog::backdrop {
   margin: 0.2rem 0 0;
   overflow-wrap: anywhere;
   font-weight: 700;
+}
+
+.build-artifacts {
+  max-width: 52rem;
+  margin-block-start: 3rem;
+  padding-block-start: 2rem;
+  border-block-start: 1px solid var(--border);
+}
+
+.build-artifacts :is(h2, h3, h4, p),
+.artifact-budget-settings :is(h2, p) {
+  margin-block-start: 0;
+}
+
+.build-artifacts-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(12rem, 1fr);
+  gap: 1rem 2rem;
+  align-items: end;
+}
+
+.build-artifacts-header p,
+.form-help,
+.saved-build-profiles small,
+.build-run-status,
+.budget-preview li span,
+.artifact-budget-settings > p,
+.settings-number-grid small,
+.project-path-label {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.build-profile-form,
+.saved-build-profiles,
+.budget-preview {
+  margin-block-start: 1.25rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: var(--surface);
+}
+
+.build-profile-form fieldset,
+.project-budget-overrides {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.build-profile-form legend,
+.project-budget-overrides legend {
+  margin-block-end: 0.5rem;
+  font-weight: 800;
+}
+
+.build-form-grid,
+.settings-number-grid,
+.project-budget-limits {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.build-form-grid label,
+.repeatable-row label,
+.settings-number-grid label,
+.project-budget-row label {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.build-form-grid .wide-field {
+  grid-column: 1 / -1;
+}
+
+.build-profile-form :is(input, select),
+.artifact-budget-settings :is(input[type="number"], select) {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  color: var(--text);
+  background: var(--surface-strong);
+}
+
+.repeatable-fields {
+  margin-block: 1.5rem !important;
+  padding-block-start: 1.25rem !important;
+  border-block-start: 1px solid var(--border) !important;
+}
+
+.repeatable-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+  margin-block-end: 0.75rem;
+}
+
+.artifact-row {
+  grid-template-columns: minmax(12rem, 1fr) minmax(9rem, 0.35fr) auto;
+}
+
+.build-artifact-error,
+.protected-floor {
+  margin-block-start: 1rem;
+  padding-inline-start: 1rem;
+  border-inline-start: 0.25rem solid var(--danger);
+}
+
+.build-artifact-error {
+  color: var(--danger);
+}
+
+.build-run-status {
+  min-height: 1.6rem;
+  margin-block: 1rem 0;
+}
+
+.saved-build-profiles ul,
+.budget-preview ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.saved-build-profiles > ul > li,
+.budget-preview > ul > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem 1rem;
+  padding-block: 1rem;
+  border-block-start: 1px solid var(--border);
+}
+
+.saved-build-profiles li > div:first-child,
+.saved-build-profiles li > small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.saved-build-profiles li > div:first-child > * {
+  display: block;
+}
+
+.saved-build-profiles li > small {
+  grid-column: 1 / -1;
+}
+
+.build-profile-details summary {
+  cursor: pointer;
+}
+
+.build-profile-details code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.budget-preview .project-root-manager-heading {
+  padding: 0 0 1rem;
+}
+
+.budget-preview h4 {
+  margin-block: 1.5rem 0.5rem;
+}
+
+.artifact-budget-settings {
+  margin-block-start: 1.5rem;
+}
+
+.artifact-budget-settings .settings-number-grid {
+  margin-block: 1.25rem;
+}
+
+.project-budget-overrides {
+  margin-block: 1.5rem !important;
+  border-block-start: 1px solid var(--border) !important;
+}
+
+.project-budget-overrides > legend {
+  padding-block-start: 1.25rem;
+}
+
+.project-budget-row {
+  display: grid;
+  gap: 1rem;
+  padding-block: 1rem;
+  border-block-end: 1px solid var(--border);
+}
+
+.project-path-label {
+  overflow-wrap: anywhere;
+  font-weight: 400;
 }
 
 @media (max-width: 42.5rem) {
@@ -734,16 +1008,20 @@ dialog::backdrop {
   }
 
   .cleanup-page-header button,
-.project-artifact-form-row button {
+  .project-artifact-form-row button,
+  .project-root-manager-heading button,
+  .project-root-actions button {
     width: 100%;
   }
 
-.project-artifacts-header,
-.project-artifact-records dl {
+  .project-artifacts-header,
+  .project-root-list > li,
+  .project-artifact-records dl {
     grid-template-columns: 1fr;
   }
 
- .project-artifact-form-row {
+  .project-artifact-form-row,
+  .project-root-actions {
     align-items: stretch;
     flex-direction: column;
   }
@@ -752,13 +1030,47 @@ dialog::backdrop {
     width: 100%;
     flex-basis: auto;
   }
+
+  .project-artifact-groups > li > header {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 42.5rem) {
+  .build-artifacts-header,
+  .build-form-grid,
+  .settings-number-grid,
+  .project-budget-limits,
+  .repeatable-row,
+  .artifact-row,
+  .saved-build-profiles > ul > li,
+  .budget-preview > ul > li {
+    grid-template-columns: 1fr;
+  }
+
+  .build-form-grid .wide-field,
+  .saved-build-profiles li > small {
+    grid-column: auto;
+  }
+
+  .repeatable-row button,
+  .saved-build-profiles .button-row button,
+  .budget-preview .project-root-manager-heading button {
+    width: 100%;
+  }
 }
 
 @media (forced-colors: active) {
   .brand-mark,
   button,
   .project-artifact-form-row input,
-  .project-artifact-records {
+  .project-root-manager,
+  .project-artifact-groups,
+  .build-profile-form,
+  .saved-build-profiles,
+  .budget-preview,
+  .build-profile-form :is(input, select),
+  .artifact-budget-settings :is(input, select) {
     border-color: ButtonText;
   }
 

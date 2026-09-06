@@ -1,7 +1,7 @@
 use cleanup_core::{
     CancellationToken, CatalogLimits, Entropy, EntryKind, FileSystem, FsError, FsErrorKind,
-    PreviewRecord, ProtectionInputs, ProtectionPolicy, ScanDiagnostic, ScanEngine, ScanLimits,
-    ScanRequest, ScanSnapshot, load_catalog,
+    Lifecycle, PreviewRecord, ProtectionInputs, ProtectionPolicy, RuleCatalog, ScanDiagnostic,
+    ScanEngine, ScanLimits, ScanRequest, ScanSnapshot, load_catalog,
 };
 use serde::Serialize;
 use std::{
@@ -37,31 +37,7 @@ const TEMPORARY_CACHE_RULE: &str = r#"{
   }]
 }"#;
 
-const PROJECT_ARTIFACT_RULE: &str = r#"{
-  "schemaVersion": 1,
-  "rules": [{
-    "id": "node-installed-dependencies",
-    "ruleVersion": 1,
-    "lifecycle": "candidate",
-    "risk": "recoverable",
-    "provenance": { "source": "built-in Node.js discovery", "verifiedAt": "2026-08-30" },
-    "defaultSelected": false,
-    "artifact": {
-      "ecosystem": "nodeJs",
-      "artifactType": "installedDependencies",
-      "recoverability": "rebuildable",
-      "rebuildConsequence": "networkDownloadRequired"
-    },
-    "scanner": "projectArtifacts",
-    "roots": [{ "binding": "projectRoot", "suffix": "" }],
-    "markers": { "all": ["package.json"], "any": [] },
-    "targets": ["node_modules"],
-    "targetType": "directory",
-    "rootDepth": 0,
-    "projectDepth": 8,
-    "targetDepth": 0
-  }]
-}"#;
+const PROJECT_ARTIFACT_RULES: &[u8] = include_bytes!("project-artifact-rules.json");
 
 const MAX_PROJECT_ROOT_BYTES: usize = 4_096;
 
@@ -73,7 +49,7 @@ const PREVIEW_LIMITS: ScanLimits = ScanLimits {
     max_measurement_entries: 250_000,
 };
 
-const PROJECT_DISCOVERY_LIMITS: ScanLimits = ScanLimits {
+pub(crate) const PROJECT_DISCOVERY_LIMITS: ScanLimits = ScanLimits {
     max_workers: 2,
     max_visited_entries: 100_000,
     max_candidates: 2_000,
@@ -114,13 +90,9 @@ pub fn discover_project_artifacts(
     root: &str,
 ) -> Result<ProjectArtifactDiscovery, CleanupPreviewError> {
     let file_system: Arc<dyn FileSystem> = Arc::new(WindowsFileSystem);
-    let root = validate_project_root(file_system.as_ref(), root)?;
-    discover_project_artifacts_with_context(
-        file_system,
-        root,
-        current_protection()?,
-        &WindowsEntropy,
-    )
+    let protection = current_protection()?;
+    let root = validate_project_root(file_system.as_ref(), &protection, root)?;
+    discover_project_artifacts_with_context(file_system, root, protection, &WindowsEntropy)
 }
 
 pub(crate) struct PrivateCleanupScan {
@@ -166,13 +138,13 @@ pub(crate) fn scan_temporary_caches() -> Result<PrivateCleanupScan, CleanupPrevi
     scan_with_context(file_system, temporary_root, protection, &WindowsEntropy)
 }
 
-fn validate_project_root(
+pub(crate) fn validate_project_root(
     file_system: &dyn FileSystem,
+    protection: &ProtectionPolicy,
     root: &str,
 ) -> Result<PathBuf, CleanupPreviewError> {
-    if root.trim().is_empty()
-        || root.len() > MAX_PROJECT_ROOT_BYTES
-        || root.chars().any(char::is_control)
+    let root = root.trim();
+    if root.is_empty() || root.len() > MAX_PROJECT_ROOT_BYTES || root.chars().any(char::is_control)
     {
         return Err(CleanupPreviewError::ProjectRootInvalid);
     }
@@ -187,32 +159,86 @@ fn validate_project_root(
     let metadata = file_system
         .metadata_no_follow(&path)
         .map_err(|_| CleanupPreviewError::ProjectRootInvalid)?;
-    if metadata.kind != EntryKind::Directory || metadata.identity.is_none() {
+    let canonical = file_system
+        .canonicalize(&path)
+        .map_err(|_| CleanupPreviewError::ProjectRootInvalid)?;
+    let canonical_metadata = file_system
+        .metadata_no_follow(&canonical)
+        .map_err(|_| CleanupPreviewError::ProjectRootInvalid)?;
+    let canonical_display = canonical.to_string_lossy();
+    if canonical_display.len() > MAX_PROJECT_ROOT_BYTES
+        || canonical_display.chars().any(char::is_control)
+        || metadata.kind != EntryKind::Directory
+        || metadata.identity.is_none()
+        || canonical_metadata.kind != EntryKind::Directory
+        || canonical_metadata.identity != metadata.identity
+        || canonical.parent().is_none()
+        || protection.is_protected(&canonical)
+    {
         return Err(CleanupPreviewError::ProjectRootInvalid);
     }
-    Ok(path)
+    Ok(canonical)
 }
 
-fn discover_project_artifacts_with_context(
+pub(crate) fn discover_project_artifacts_with_context(
     file_system: Arc<dyn FileSystem>,
     root: PathBuf,
     protection: ProtectionPolicy,
     entropy: &dyn Entropy,
 ) -> Result<ProjectArtifactDiscovery, CleanupPreviewError> {
+    discover_project_artifacts_with_limits(
+        file_system,
+        root,
+        protection,
+        entropy,
+        PROJECT_DISCOVERY_LIMITS,
+    )
+}
+
+pub(crate) fn discover_project_artifacts_with_limits(
+    file_system: Arc<dyn FileSystem>,
+    root: PathBuf,
+    protection: ProtectionPolicy,
+    entropy: &dyn Entropy,
+    limits: ScanLimits,
+) -> Result<ProjectArtifactDiscovery, CleanupPreviewError> {
     let catalog = load_catalog(
-        Cursor::new(PROJECT_ARTIFACT_RULE.as_bytes()),
+        Cursor::new(PROJECT_ARTIFACT_RULES),
         CatalogLimits::default(),
     )
     .map_err(|_| CleanupPreviewError::CatalogInvalid)?;
+    discover_project_artifacts_from_catalog(
+        file_system,
+        root,
+        protection,
+        entropy,
+        &catalog,
+        limits,
+    )
+}
+
+fn discover_project_artifacts_from_catalog(
+    file_system: Arc<dyn FileSystem>,
+    root: PathBuf,
+    protection: ProtectionPolicy,
+    entropy: &dyn Entropy,
+    catalog: &RuleCatalog,
+    limits: ScanLimits,
+) -> Result<ProjectArtifactDiscovery, CleanupPreviewError> {
     let roots = HashMap::from([("projectRoot".to_owned(), root)]);
-    let selected = vec!["node-installed-dependencies".to_owned()];
+    let selected: Vec<_> = catalog
+        .rules()
+        .iter()
+        .filter(|rule| matches!(rule.lifecycle, Lifecycle::Verified | Lifecycle::Stable))
+        .map(|rule| rule.id.clone())
+        .collect();
     let result = ScanEngine::new(file_system)
         .scan(ScanRequest {
-            catalog: &catalog,
+            catalog,
             selected_rule_ids: &selected,
             root_bindings: &roots,
             protection: &protection,
-            limits: PROJECT_DISCOVERY_LIMITS,
+            limits,
             cancellation: CancellationToken::new(),
             entropy,
             progress: &|_| {},
@@ -316,6 +342,7 @@ impl Entropy for WindowsEntropy {
 mod tests {
     use super::*;
     use std::{
+        collections::HashSet,
         env, fs,
         sync::atomic::{AtomicU64, Ordering},
     };
@@ -463,6 +490,7 @@ mod tests {
             serde_json::json!({
                 "ecosystem": "nodeJs",
                 "artifactType": "installedDependencies",
+                "confidence": "high",
                 "recoverability": "rebuildable",
                 "rebuildConsequence": "networkDownloadRequired"
             })
@@ -476,12 +504,112 @@ mod tests {
     }
 
     #[test]
+    fn every_production_catalog_rule_discovers_its_documented_matcher_shape() {
+        let temp = TestDirectory::new();
+        let (scan, protection_inputs) = test_context(&temp);
+        let catalog = load_catalog(
+            Cursor::new(PROJECT_ARTIFACT_RULES),
+            CatalogLimits::default(),
+        )
+        .unwrap();
+        let expected: HashSet<_> = catalog
+            .rules()
+            .iter()
+            .filter(|rule| matches!(rule.lifecycle, Lifecycle::Verified | Lifecycle::Stable))
+            .map(|rule| rule.id.clone())
+            .collect();
+        for rule in catalog.rules() {
+            let project = scan.join(&rule.id);
+            fs::create_dir(&project).unwrap();
+            for marker in &rule.markers.all {
+                fs::write(project.join(marker), b"marker").unwrap();
+            }
+            if let Some(marker) = rule.markers.any.first() {
+                fs::write(project.join(marker), b"marker").unwrap();
+            }
+            if let Some(suffix) = rule.markers.any_suffix.first() {
+                fs::write(project.join(format!("fixture{suffix}")), b"marker").unwrap();
+            }
+            let target = rule
+                .targets
+                .first()
+                .cloned()
+                .or_else(|| {
+                    rule.target_prefixes
+                        .first()
+                        .map(|prefix| format!("{prefix}fixture"))
+                })
+                .or_else(|| {
+                    rule.target_suffixes
+                        .first()
+                        .map(|suffix| format!("fixture{suffix}"))
+                })
+                .unwrap();
+            fs::create_dir(project.join(target)).unwrap();
+        }
+        let file_system: Arc<dyn FileSystem> = Arc::new(WindowsFileSystem);
+        let protection =
+            ProtectionPolicy::compile(file_system.as_ref(), protection_inputs).unwrap();
+
+        let discovery = discover_project_artifacts_with_context(
+            file_system,
+            scan,
+            protection,
+            &TestEntropy::default(),
+        )
+        .unwrap();
+        let actual: HashSet<_> = discovery
+            .records
+            .iter()
+            .map(|record| record.rule_id.clone())
+            .collect();
+        assert_eq!(actual, expected, "{:?}", discovery.diagnostics);
+        assert!(
+            discovery
+                .records
+                .iter()
+                .all(|record| record.default_selected == Some(false))
+        );
+    }
+
+    #[test]
+    fn candidate_project_rules_are_never_selected_by_the_adapter() {
+        let temp = TestDirectory::new();
+        let (scan, protection_inputs) = test_context(&temp);
+        fs::write(scan.join("package.json"), b"{}").unwrap();
+        fs::create_dir(scan.join("candidate-output")).unwrap();
+        let file_system: Arc<dyn FileSystem> = Arc::new(WindowsFileSystem);
+        let protection =
+            ProtectionPolicy::compile(file_system.as_ref(), protection_inputs).unwrap();
+        let catalog = load_catalog(
+            Cursor::new(
+                br#"{"schemaVersion":1,"rules":[{"id":"candidate","ruleVersion":1,"lifecycle":"candidate","risk":"recoverable","provenance":{"source":"test","verifiedAt":"2026-09-03"},"defaultSelected":false,"artifact":{"ecosystem":"nodeJs","artifactType":"buildOutput","confidence":"medium","recoverability":"rebuildable","rebuildConsequence":"localRebuild"},"scanner":"projectArtifacts","roots":[{"binding":"projectRoot","suffix":""}],"markers":{"all":["package.json"]},"targets":["candidate-output"],"targetType":"directory","rootDepth":0,"projectDepth":1,"targetDepth":0}] }"#,
+            ),
+            CatalogLimits::default(),
+        )
+        .unwrap();
+
+        let discovery = discover_project_artifacts_from_catalog(
+            file_system,
+            scan,
+            protection,
+            &TestEntropy::default(),
+            &catalog,
+            PROJECT_DISCOVERY_LIMITS,
+        )
+        .unwrap();
+        assert!(discovery.records.is_empty());
+    }
+
+    #[test]
     fn project_artifacts_invalid_roots_are_rejected_before_discovery() {
         let temp = TestDirectory::new();
         let directory = temp.directory("directory");
         let file = temp.0.join("file.txt");
         fs::write(&file, b"file").unwrap();
         let file_system = WindowsFileSystem;
+        let (_, protection_inputs) = test_context(&temp);
+        let protection = ProtectionPolicy::compile(&file_system, protection_inputs).unwrap();
 
         for root in [
             "",
@@ -491,18 +619,20 @@ mod tests {
             temp.0.join("missing").to_str().unwrap(),
         ] {
             assert_eq!(
-                validate_project_root(&file_system, root),
+                validate_project_root(&file_system, &protection, root),
                 Err(CleanupPreviewError::ProjectRootInvalid)
             );
         }
         let oversized = format!(r"C:\{}", "x".repeat(MAX_PROJECT_ROOT_BYTES));
         assert_eq!(
-            validate_project_root(&file_system, &oversized),
+            validate_project_root(&file_system, &protection, &oversized),
             Err(CleanupPreviewError::ProjectRootInvalid)
         );
         assert_eq!(
-            validate_project_root(&file_system, directory.to_str().unwrap()),
-            Ok(directory)
+            validate_project_root(&file_system, &protection, directory.to_str().unwrap()),
+            file_system
+                .canonicalize(&directory)
+                .map_err(|_| CleanupPreviewError::ProjectRootInvalid)
         );
     }
 

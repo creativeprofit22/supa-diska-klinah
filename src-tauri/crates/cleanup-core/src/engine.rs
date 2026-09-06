@@ -1,5 +1,5 @@
 use crate::{
-    ArtifactIntelligence, CleanupRule, DirectoryEntry, Entropy, EntryKind, EntryMetadata,
+    Activity, ArtifactIntelligence, CleanupRule, DirectoryEntry, Entropy, EntryKind, EntryMetadata,
     FileIdentity, FileSystem, FsError, ProtectionPolicy, ReadDirControl, Risk, RuleCatalog,
     ScannerKind,
     scanner::{CandidateDraft, ScannerRegistry, TraversalContext},
@@ -87,6 +87,10 @@ pub struct PreviewRecord {
     pub bytes: u64,
     pub modified_unix_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub age_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<Activity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
@@ -103,12 +107,29 @@ pub enum PreviewKind {
     File,
     Directory,
 }
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum CandidateProofScope {
+    #[default]
+    Temporary,
+    RegisteredBuildArtifact {
+        root_id: String,
+        profile_id: String,
+        generation_id: String,
+    },
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedCandidate {
+    #[serde(default)]
+    pub scope: CandidateProofScope,
     pub path: PathBuf,
     pub scan_root: PathBuf,
     pub context_root: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_identity: Option<FileIdentity>,
     pub rule: CleanupRule,
     pub identity: FileIdentity,
     pub kind: EntryKind,
@@ -237,7 +258,12 @@ pub fn revalidate_candidate(
     if !crate::scanner::old_enough(&candidate.rule, &metadata, now) {
         return Err(CandidateRejection::TooRecent);
     }
-    if candidate.rule.scanner == crate::ScannerKind::ProjectArtifacts {
+    if candidate.rule.scanner == crate::ScannerKind::ProjectArtifacts
+        || matches!(
+            candidate.scope,
+            CandidateProofScope::RegisteredBuildArtifact { .. }
+        )
+    {
         let context_metadata = fs
             .metadata_no_follow(&candidate.context_root)
             .map_err(|_| CandidateRejection::MarkerMissing)?;
@@ -247,6 +273,9 @@ pub fn revalidate_candidate(
         if context_metadata.kind != EntryKind::Directory {
             return Err(CandidateRejection::MarkerMissing);
         }
+        if context_metadata.identity != candidate.context_identity {
+            return Err(CandidateRejection::IdentityChanged);
+        }
         let mut names = HashSet::new();
         fs.read_dir(&candidate.context_root, context_identity, &mut |entry| {
             if entry.kind != EntryKind::LinkLike {
@@ -255,19 +284,8 @@ pub fn revalidate_candidate(
             ReadDirControl::Continue
         })
         .map_err(|_| CandidateRejection::MarkerMissing)?;
-        if !candidate
-            .rule
-            .markers
-            .all
-            .iter()
-            .all(|name| names.contains(&name.to_ascii_lowercase()))
-            || (!candidate.rule.markers.any.is_empty()
-                && !candidate
-                    .rule
-                    .markers
-                    .any
-                    .iter()
-                    .any(|name| names.contains(&name.to_ascii_lowercase())))
+        if candidate.rule.scanner == crate::ScannerKind::ProjectArtifacts
+            && !crate::scanner::marker_matches(&candidate.rule, &names)
         {
             return Err(CandidateRejection::MarkerMissing);
         }
@@ -370,6 +388,7 @@ pub enum DiagnosticReason {
     OutsideRoot,
     Protected,
     Changed,
+    Overlap,
     LimitReached,
 }
 #[derive(Debug)]
@@ -464,8 +483,15 @@ impl ScanEngine {
             completed_jobs: total_jobs,
             total_jobs,
         });
+        let snapshot = finalize(
+            measured,
+            self.fs.semantics(),
+            entropy,
+            &mut diagnostics,
+            limits.max_diagnostics,
+        )?;
         Ok(ScanResult {
-            snapshot: finalize(measured, self.fs.semantics(), entropy)?,
+            snapshot,
             diagnostics,
         })
     }
@@ -592,9 +618,33 @@ impl ScanEngine {
                     continue;
                 }
             };
-            if !self.fs.semantics().contains(&draft.scan_root, &canonical) {
+            if !self.fs.semantics().equivalent(&draft.path, &canonical)
+                || !self.fs.semantics().contains(&draft.scan_root, &canonical)
+            {
                 push_diagnostic(diagnostics, limits, &draft, DiagnosticReason::OutsideRoot);
                 continue;
+            }
+            if draft.rule.scanner == ScannerKind::ProjectArtifacts {
+                let context_metadata = self.fs.metadata_no_follow(&draft.context_root).ok();
+                let canonical_context = self.fs.canonicalize(&draft.context_root).ok();
+                if context_metadata.as_ref().is_none_or(|metadata| {
+                    metadata.kind != EntryKind::Directory
+                        || metadata.identity != Some(draft.context_identity)
+                }) || canonical_context
+                    .as_ref()
+                    .is_none_or(|path| !self.fs.semantics().equivalent(path, &draft.context_root))
+                {
+                    push_diagnostic(diagnostics, limits, &draft, DiagnosticReason::Changed);
+                    continue;
+                }
+                if !self
+                    .fs
+                    .semantics()
+                    .contains(&draft.context_root, &canonical)
+                {
+                    push_diagnostic(diagnostics, limits, &draft, DiagnosticReason::OutsideRoot);
+                    continue;
+                }
             }
             if protection.is_protected(&canonical) {
                 push_diagnostic(diagnostics, limits, &draft, DiagnosticReason::Protected);
@@ -648,17 +698,27 @@ impl ScanEngine {
                 push_diagnostic(diagnostics, limits, &draft, DiagnosticReason::Changed);
                 continue;
             }
+            let project_artifact = draft.rule.scanner == ScannerKind::ProjectArtifacts;
+            let activity = project_artifact.then(|| {
+                if self.fs.ensure_inactive(&canonical).is_ok() {
+                    Activity::Idle
+                } else {
+                    Activity::InUse
+                }
+            });
             output.push(Measured {
                 rule: draft.rule,
                 scan_root: draft.scan_root,
                 context_root: draft.context_root,
+                context_identity: draft.context_identity,
                 path: canonical,
                 identity,
                 kind: before.kind,
                 logical_bytes: measured_tree.logical_bytes,
                 allocated_bytes: measured_tree.allocated_bytes,
-                modified: before.modified,
+                modified: measured_tree.latest_modified,
                 scanned_at: draft.scanned_at,
+                activity,
             });
         }
         Ok(output)
@@ -687,6 +747,7 @@ impl ScanEngine {
                             .fs
                             .allocated_size(root, &metadata)
                             .map_err(ScanError::Filesystem)?,
+                        latest_modified: metadata.modified,
                         entries: vec![MeasuredEntry {
                             path: root.to_path_buf(),
                             metadata,
@@ -718,6 +779,7 @@ impl ScanEngine {
             .fs
             .allocated_size(root, &root_metadata)
             .map_err(ScanError::Filesystem)?;
+        let mut latest_modified = root_metadata.modified;
         let mut stack = vec![(root.to_path_buf(), draft.identity)];
         let mut identities = HashSet::from([draft.identity]);
         let mut entries = Vec::new();
@@ -788,6 +850,7 @@ impl ScanEngine {
                         stopped = Some(DiagnosticReason::Loop);
                         return ReadDirControl::Stop;
                     }
+                    latest_modified = latest_modified.max(metadata.modified);
                     children.push(entry.clone());
                     entries.push(MeasuredEntry {
                         path: entry.path.clone(),
@@ -840,6 +903,7 @@ impl ScanEngine {
         Ok(Some(MeasuredTree {
             logical_bytes,
             allocated_bytes,
+            latest_modified,
             entries,
             directories,
         }))
@@ -911,6 +975,7 @@ impl ScanEngine {
 struct MeasuredTree {
     logical_bytes: u64,
     allocated_bytes: u64,
+    latest_modified: Option<SystemTime>,
     entries: Vec<MeasuredEntry>,
     directories: Vec<MeasuredDirectory>,
 }
@@ -1001,6 +1066,7 @@ struct Measured {
     rule: CleanupRule,
     scan_root: PathBuf,
     context_root: PathBuf,
+    context_identity: FileIdentity,
     path: PathBuf,
     identity: FileIdentity,
     kind: EntryKind,
@@ -1008,11 +1074,14 @@ struct Measured {
     allocated_bytes: u64,
     modified: Option<SystemTime>,
     scanned_at: SystemTime,
+    activity: Option<Activity>,
 }
 fn finalize(
     mut measured: Vec<Measured>,
     semantics: crate::PathSemantics,
     entropy: &dyn Entropy,
+    diagnostics: &mut Vec<ScanDiagnostic>,
+    max_diagnostics: usize,
 ) -> Result<ScanSnapshot, ScanError> {
     measured.sort_by(|left, right| {
         path_depth(&left.path)
@@ -1020,13 +1089,28 @@ fn finalize(
             .then_with(|| semantics.key(&left.path).cmp(&semantics.key(&right.path)))
             .then_with(|| left.rule.id.cmp(&right.rule.id))
     });
-    let mut retained: Vec<Measured> = Vec::new();
+    let mut unique: Vec<Measured> = Vec::new();
     for candidate in measured {
-        if !retained.iter().any(|parent| {
-            semantics.equivalent(&parent.path, &candidate.path)
-                || (parent.kind == EntryKind::Directory
-                    && semantics.contains(&parent.path, &candidate.path))
+        if !unique.iter().any(|retained| {
+            retained.identity == candidate.identity
+                || semantics.equivalent(&retained.path, &candidate.path)
         }) {
+            unique.push(candidate);
+        }
+    }
+    let mut retained: Vec<Measured> = Vec::new();
+    for candidate in unique {
+        if retained.iter().any(|parent| {
+            parent.kind == EntryKind::Directory && semantics.contains(&parent.path, &candidate.path)
+        }) {
+            if diagnostics.len() < max_diagnostics {
+                diagnostics.push(ScanDiagnostic {
+                    rule_id: candidate.rule.id.clone(),
+                    path: candidate.path.to_string_lossy().into_owned(),
+                    reason: DiagnosticReason::Overlap,
+                });
+            }
+        } else {
             retained.push(candidate);
         }
     }
@@ -1048,6 +1132,18 @@ fn finalize(
             },
             bytes: candidate.logical_bytes,
             modified_unix_seconds: candidate.modified.and_then(unix_seconds),
+            age_seconds: project_artifact
+                .then(|| {
+                    candidate.modified.map(|modified| {
+                        candidate
+                            .scanned_at
+                            .duration_since(modified)
+                            .unwrap_or_default()
+                            .as_secs()
+                    })
+                })
+                .flatten(),
+            activity: candidate.activity,
             project_name: project_artifact.then(|| project_name(&candidate.context_root)),
             project_path: project_artifact
                 .then(|| candidate.context_root.to_string_lossy().into_owned()),
@@ -1058,9 +1154,11 @@ fn finalize(
         resolved.insert(
             id,
             ResolvedCandidate {
+                scope: CandidateProofScope::Temporary,
                 path: candidate.path,
                 scan_root: candidate.scan_root,
                 context_root: candidate.context_root,
+                context_identity: project_artifact.then_some(candidate.context_identity),
                 rule: candidate.rule,
                 identity: candidate.identity,
                 kind: candidate.kind,

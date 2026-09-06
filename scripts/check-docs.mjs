@@ -2,9 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 
 const requiredDocuments = [
   "docs/architecture.md",
+  "docs/build-artifact-budgets.md",
   "docs/cleanup-rules.md",
   "docs/development.md",
   "docs/parity.md",
+  "docs/project-artifacts.md",
+  "docs/release-checklist.md",
   "docs/security.md",
   "docs/licensing.md",
   "docs/adr/0001-modular-boundaries.md",
@@ -41,4 +44,20 @@ if (missingSecuritySections.length) {
   process.exit(1);
 }
 
+const artifacts = readFileSync("docs/build-artifact-budgets.md", "utf8");
+for (const required of [
+  "cargo.exe",
+  "node.exe",
+  "automatic `cargo clean`",
+  "protected floor",
+  "watcher silence",
+  "seven days",
+  "Cancellation",
+  "undo",
+]) {
+  if (!artifacts.includes(required)) {
+    console.error(`Documentation check failed: artifact budget guide lacks ${required}`);
+    process.exit(1);
+  }
+}
 console.log("Threat model, privilege inventory, recovery, and README links verified.");

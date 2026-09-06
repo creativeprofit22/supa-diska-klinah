@@ -66,6 +66,7 @@ impl Scanner for DirectScanner {
                             rule: rule.clone(),
                             scan_root: root.to_path_buf(),
                             context_root: root.to_path_buf(),
+                            context_identity: root_identity,
                             path: entry.path.clone(),
                             kind: metadata.kind,
                             identity: metadata.identity.expect("validated identity"),

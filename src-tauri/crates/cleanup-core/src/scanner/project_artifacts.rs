@@ -1,4 +1,6 @@
-use super::{CandidateDraft, Scanner, TraversalContext, excluded, old_enough, target_matches};
+use super::{
+    CandidateDraft, Scanner, TraversalContext, excluded, marker_matches, old_enough, target_matches,
+};
 use crate::{CleanupRule, DiagnosticReason, EntryKind, FileIdentity, ScanError};
 use std::{collections::HashSet, path::Path};
 
@@ -33,17 +35,7 @@ impl Scanner for ProjectArtifactsScanner {
                 .filter(|entry| entry.kind != EntryKind::LinkLike)
                 .map(|entry| entry.name.to_ascii_lowercase())
                 .collect();
-            let marker_match = rule
-                .markers
-                .all
-                .iter()
-                .all(|name| names.contains(&name.to_ascii_lowercase()))
-                && (rule.markers.any.is_empty()
-                    || rule
-                        .markers
-                        .any
-                        .iter()
-                        .any(|name| names.contains(&name.to_ascii_lowercase())));
+            let marker_match = marker_matches(rule, &names);
             if marker_match {
                 discover_targets(
                     rule,
@@ -148,6 +140,7 @@ fn discover_targets(
                         rule: rule.clone(),
                         scan_root: scan_root.to_path_buf(),
                         context_root: project_root.to_path_buf(),
+                        context_identity: project_identity,
                         path: entry.path.clone(),
                         kind: metadata.kind,
                         identity: metadata.identity.expect("validated identity"),

@@ -2,8 +2,8 @@ use serde::Serialize;
 use std::sync::Arc;
 use windows_platform::cleanup::{
     AutoCleanupPolicy, CleanupDisposition, CleanupExecutionSummary, CleanupPlanSummary,
-    CleanupPreview, CleanupPreviewError, CleanupService, CleanupServiceError,
-    ProjectArtifactDiscovery, discover_project_artifacts as discover_project_artifacts_adapter,
+    CleanupPreview, CleanupPreviewError, CleanupService, CleanupServiceError, ProjectArtifactScan,
+    ProjectRoot,
 };
 
 #[derive(Debug, Serialize)]
@@ -34,6 +34,16 @@ impl From<CleanupServiceError> for CleanupCommandError {
             CleanupServiceError::Conflict => {
                 ("cleanupBusy", "Another cleanup operation is running.")
             }
+            CleanupServiceError::DuplicateRoot => {
+                ("duplicateRoot", "That project root is already saved.")
+            }
+            CleanupServiceError::RootPaused => {
+                ("rootPaused", "Resume this project root before scanning it.")
+            }
+            CleanupServiceError::RootLimitReached => (
+                "rootLimitReached",
+                "Remove a project root before adding another.",
+            ),
             CleanupServiceError::ValidationFailed => (
                 "validationFailed",
                 "Cleanup stopped because an item changed.",
@@ -87,10 +97,48 @@ pub(crate) async fn preview_cleanup(
 }
 
 #[tauri::command]
+pub(crate) async fn list_project_roots(
+    service: tauri::State<'_, Arc<CleanupService>>,
+) -> Result<Vec<ProjectRoot>, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.list_project_roots()).await
+}
+
+#[tauri::command]
+pub(crate) async fn add_project_root(
+    service: tauri::State<'_, Arc<CleanupService>>,
+    path: String,
+) -> Result<Vec<ProjectRoot>, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.add_project_root(&path)).await
+}
+
+#[tauri::command]
+pub(crate) async fn set_project_root_paused(
+    service: tauri::State<'_, Arc<CleanupService>>,
+    root_id: String,
+    paused: bool,
+) -> Result<Vec<ProjectRoot>, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.set_project_root_paused(&root_id, paused)).await
+}
+
+#[tauri::command]
+pub(crate) async fn remove_project_root(
+    service: tauri::State<'_, Arc<CleanupService>>,
+    root_id: String,
+) -> Result<Vec<ProjectRoot>, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.remove_project_root(&root_id)).await
+}
+
+#[tauri::command]
 pub(crate) async fn discover_project_artifacts(
-    root: String,
-) -> Result<ProjectArtifactDiscovery, CleanupCommandError> {
-    run_blocking(move || discover_project_artifacts_adapter(&root)).await
+    service: tauri::State<'_, Arc<CleanupService>>,
+    root_id: Option<String>,
+) -> Result<ProjectArtifactScan, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.discover_project_artifacts(root_id.as_deref())).await
 }
 
 fn validate_manual_disposition(disposition: CleanupDisposition) -> Result<(), CleanupCommandError> {
@@ -219,6 +267,21 @@ mod tests {
                 CleanupServiceError::Conflict,
                 "cleanupBusy",
                 "Another cleanup operation is running.",
+            ),
+            (
+                CleanupServiceError::DuplicateRoot,
+                "duplicateRoot",
+                "That project root is already saved.",
+            ),
+            (
+                CleanupServiceError::RootPaused,
+                "rootPaused",
+                "Resume this project root before scanning it.",
+            ),
+            (
+                CleanupServiceError::RootLimitReached,
+                "rootLimitReached",
+                "Remove a project root before adding another.",
             ),
             (
                 CleanupServiceError::ValidationFailed,

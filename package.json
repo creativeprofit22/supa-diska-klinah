@@ -11,10 +11,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "test": "vitest run --pool=threads --maxWorkers=1",
+    "test": "vitest run --dir src --pool=threads --maxWorkers=1",
     "build:helper": "node scripts/build-privileged-helper.mjs",
     "check": "pnpm check:dependencies && pnpm check:parity && pnpm check:architecture && pnpm check:security && pnpm check:docs && pnpm build",
-    "check:architecture": "node scripts/check-architecture.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs && node --test scripts/check-architecture.test.mjs",
+    "check:types": "tsc --noEmit",
     "check:dependencies": "node scripts/check-dependencies.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "check:native-ci": "node scripts/check-native-ci.mjs",

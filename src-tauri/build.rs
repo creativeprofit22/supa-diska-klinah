@@ -3,6 +3,10 @@ fn main() {
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(&[
                 "preview_cleanup",
+                "list_project_roots",
+                "add_project_root",
+                "set_project_root_paused",
+                "remove_project_root",
                 "discover_project_artifacts",
                 "create_cleanup_plan",
                 "execute_cleanup_plan",
@@ -11,6 +15,16 @@ fn main() {
                 "cleanup_history",
                 "get_auto_cleanup_policy",
                 "set_auto_cleanup_policy",
+                "list_build_profiles",
+                "register_build_profile",
+                "remove_build_profile",
+                "start_build_run",
+                "get_build_run",
+                "get_active_build_run",
+                "cancel_build_run",
+                "get_artifact_budget_policy",
+                "set_artifact_budget_policy",
+                "preview_artifact_budgets",
                 "foundation_status",
                 "create_system_restore_point",
             ]))

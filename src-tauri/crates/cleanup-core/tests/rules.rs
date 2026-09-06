@@ -1,6 +1,6 @@
 use cleanup_core::{
-    ArtifactEcosystem, ArtifactType, CatalogError, CatalogLimits, Lifecycle, RebuildConsequence,
-    Recoverability, ScannerKind, load_catalog,
+    Activity, ArtifactEcosystem, ArtifactType, CatalogError, CatalogLimits, Confidence, Lifecycle,
+    RebuildConsequence, Recoverability, ScannerKind, load_catalog,
 };
 use std::io::Cursor;
 
@@ -10,9 +10,9 @@ fn valid() -> String {
       "rules": [{
         "id": "node-modules", "ruleVersion": 1, "lifecycle": "verified", "risk": "recoverable",
         "provenance": {"source": "maintainer", "verifiedAt": "2026-08-30"}, "defaultSelected": true,
-        "artifact": {"ecosystem": "nodeJs", "artifactType": "installedDependencies", "recoverability": "rebuildable", "rebuildConsequence": "networkDownloadRequired"},
+        "artifact": {"ecosystem": "nodeJs", "artifactType": "installedDependencies", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "networkDownloadRequired"},
         "scanner": "projectArtifacts", "roots": [{"binding": "profile", "suffix": "source"}],
-        "markers": {"all": ["package.json"], "any": []}, "targets": ["node_modules"], "targetType": "directory",
+        "markers": {"all": ["package.json"], "any": [], "anySuffix": [".csproj"]}, "targets": ["node_modules"], "targetPrefixes": ["cmake-build-"], "targetSuffixes": [".egg-info"], "targetType": "directory",
         "rootDepth": 4, "projectDepth": 3, "targetDepth": 2, "minimumAgeSeconds": 3600,
         "excludedNames": ["keep"], "excludedPaths": ["important/cache"]
       }]
@@ -39,7 +39,11 @@ fn rules_load_a_complete_v1_rule() {
     let artifact = rule.artifact.unwrap();
     assert_eq!(artifact.ecosystem, ArtifactEcosystem::NodeJs);
     assert_eq!(artifact.artifact_type, ArtifactType::InstalledDependencies);
+    assert_eq!(artifact.confidence, Confidence::High);
     assert_eq!(artifact.recoverability, Recoverability::Rebuildable);
+    assert_eq!(rule.markers.any_suffix, [".csproj"]);
+    assert_eq!(rule.target_prefixes, ["cmake-build-"]);
+    assert_eq!(rule.target_suffixes, [".egg-info"]);
     assert_eq!(
         artifact.rebuild_consequence,
         RebuildConsequence::NetworkDownloadRequired
@@ -49,9 +53,89 @@ fn rules_load_a_complete_v1_rule() {
         serde_json::json!({
             "ecosystem": "nodeJs",
             "artifactType": "installedDependencies",
+            "confidence": "high",
             "recoverability": "rebuildable",
             "rebuildConsequence": "networkDownloadRequired"
         })
+    );
+}
+
+#[test]
+fn project_artifact_enums_serialize_as_closed_camel_case_values() {
+    assert_eq!(
+        serde_json::to_value([
+            ArtifactEcosystem::Rust,
+            ArtifactEcosystem::NextJs,
+            ArtifactEcosystem::Angular,
+            ArtifactEcosystem::Nuxt,
+            ArtifactEcosystem::Vite,
+            ArtifactEcosystem::SvelteKit,
+            ArtifactEcosystem::Astro,
+            ArtifactEcosystem::Python,
+            ArtifactEcosystem::DotNet,
+            ArtifactEcosystem::Gradle,
+            ArtifactEcosystem::Maven,
+            ArtifactEcosystem::Cmake,
+            ArtifactEcosystem::Unity,
+            ArtifactEcosystem::Unreal,
+            ArtifactEcosystem::Godot,
+        ])
+        .unwrap(),
+        serde_json::json!([
+            "rust",
+            "nextJs",
+            "angular",
+            "nuxt",
+            "vite",
+            "svelteKit",
+            "astro",
+            "python",
+            "dotNet",
+            "gradle",
+            "maven",
+            "cmake",
+            "unity",
+            "unreal",
+            "godot"
+        ])
+    );
+    assert_eq!(
+        serde_json::to_value([
+            ArtifactType::BuildOutput,
+            ArtifactType::CompilerCache,
+            ArtifactType::FrameworkCache,
+            ArtifactType::VirtualEnvironment,
+            ArtifactType::TestCache,
+            ArtifactType::GeneratedIntermediate,
+            ArtifactType::ImportedAssetCache,
+        ])
+        .unwrap(),
+        serde_json::json!([
+            "buildOutput",
+            "compilerCache",
+            "frameworkCache",
+            "virtualEnvironment",
+            "testCache",
+            "generatedIntermediate",
+            "importedAssetCache"
+        ])
+    );
+    assert_eq!(
+        serde_json::to_value([Confidence::High, Confidence::Medium]).unwrap(),
+        serde_json::json!(["high", "medium"])
+    );
+    assert_eq!(
+        serde_json::to_value([Activity::Idle, Activity::InUse]).unwrap(),
+        serde_json::json!(["idle", "inUse"])
+    );
+    assert_eq!(
+        serde_json::to_value([
+            RebuildConsequence::LocalRebuild,
+            RebuildConsequence::ToolchainRequired,
+            RebuildConsequence::ExpensiveReimport,
+        ])
+        .unwrap(),
+        serde_json::json!(["localRebuild", "toolchainRequired", "expensiveReimport"])
     );
 }
 
@@ -103,7 +187,7 @@ fn rules_reject_unsafe_defaults_duplicates_traversal_and_contradictions() {
     ));
 
     let missing_artifact = valid().replace(
-        "        \"artifact\": {\"ecosystem\": \"nodeJs\", \"artifactType\": \"installedDependencies\", \"recoverability\": \"rebuildable\", \"rebuildConsequence\": \"networkDownloadRequired\"},\n",
+        "        \"artifact\": {\"ecosystem\": \"nodeJs\", \"artifactType\": \"installedDependencies\", \"confidence\": \"high\", \"recoverability\": \"rebuildable\", \"rebuildConsequence\": \"networkDownloadRequired\"},\n",
         "",
     );
     assert!(matches!(
@@ -114,7 +198,7 @@ fn rules_reject_unsafe_defaults_duplicates_traversal_and_contradictions() {
     let direct_artifact = valid()
         .replace("\"projectArtifacts\"", "\"direct\"")
         .replace(
-            "\"markers\": {\"all\": [\"package.json\"], \"any\": []}",
+            "\"markers\": {\"all\": [\"package.json\"], \"any\": [], \"anySuffix\": [\".csproj\"]}",
             "\"markers\": {}",
         )
         .replace(", \"projectDepth\": 3, \"targetDepth\": 2", "");
@@ -125,12 +209,12 @@ fn rules_reject_unsafe_defaults_duplicates_traversal_and_contradictions() {
 
     let direct_target_depth = valid()
         .replace(
-            "        \"artifact\": {\"ecosystem\": \"nodeJs\", \"artifactType\": \"installedDependencies\", \"recoverability\": \"rebuildable\", \"rebuildConsequence\": \"networkDownloadRequired\"},\n",
+            "        \"artifact\": {\"ecosystem\": \"nodeJs\", \"artifactType\": \"installedDependencies\", \"confidence\": \"high\", \"recoverability\": \"rebuildable\", \"rebuildConsequence\": \"networkDownloadRequired\"},\n",
             "",
         )
         .replace("\"projectArtifacts\"", "\"direct\"")
         .replace(
-            "\"markers\": {\"all\": [\"package.json\"], \"any\": []}",
+            "\"markers\": {\"all\": [\"package.json\"], \"any\": [], \"anySuffix\": [\".csproj\"]}",
             "\"markers\": {}",
         )
         .replace(", \"projectDepth\": 3", "");
@@ -143,5 +227,35 @@ fn rules_reject_unsafe_defaults_duplicates_traversal_and_contradictions() {
     assert!(matches!(
         load_catalog(Cursor::new(unknown_ecosystem), CatalogLimits::default()),
         Err(CatalogError::Json(_))
+    ));
+
+    for invalid_literal in ["", "*", "?", "../cache", "cache/name", "cache\\name"] {
+        let invalid = valid().replace("\"cmake-build-\"", &format!("\"{invalid_literal}\""));
+        assert!(matches!(
+            load_catalog(Cursor::new(invalid), CatalogLimits::default()),
+            Err(CatalogError::Invalid(_))
+        ));
+    }
+    let no_markers = valid().replace(
+        "\"markers\": {\"all\": [\"package.json\"], \"any\": [], \"anySuffix\": [\".csproj\"]}",
+        "\"markers\": {}",
+    );
+    assert!(matches!(
+        load_catalog(Cursor::new(no_markers), CatalogLimits::default()),
+        Err(CatalogError::Invalid(_))
+    ));
+    let no_targets = valid()
+        .replace("\"targets\": [\"node_modules\"]", "\"targets\": []")
+        .replace(
+            "\"targetPrefixes\": [\"cmake-build-\"]",
+            "\"targetPrefixes\": []",
+        )
+        .replace(
+            "\"targetSuffixes\": [\".egg-info\"]",
+            "\"targetSuffixes\": []",
+        );
+    assert!(matches!(
+        load_catalog(Cursor::new(no_targets), CatalogLimits::default()),
+        Err(CatalogError::Invalid(_))
     ));
 }

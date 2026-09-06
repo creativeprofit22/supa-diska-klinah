@@ -4,6 +4,10 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage";
 
+vi.mock("../build-artifacts/ArtifactBudgetSettings", () => ({
+  ArtifactBudgetSettings: () => <div>Artifact budget settings</div>,
+}));
+
 const { getAutoCleanupPolicy, setAutoCleanupPolicy } = vi.hoisted(() => ({
   getAutoCleanupPolicy: vi.fn(),
   setAutoCleanupPolicy: vi.fn(),

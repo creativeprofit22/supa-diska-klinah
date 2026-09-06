@@ -17,25 +17,33 @@ The maintained example is [`catalog-v1.json`](../src-tauri/crates/cleanup-core/t
 | `risk` | `safe`, `recoverable`, or `highImpact`. |
 | `provenance` | Nonempty `source` and `verifiedAt` evidence strings. |
 | `defaultSelected` | Initial selection; forbidden for candidate, deprecated, disabled, and high-impact rules. |
-| `artifact` | Required for `projectArtifacts` and rejected for `direct`; closed ecosystem, artifact type, recoverability, and rebuild-consequence metadata. |
+| `artifact` | Required for `projectArtifacts` and rejected for `direct`; closed ecosystem, artifact type, confidence, recoverability, and rebuild-consequence metadata. |
 | `scanner` | `direct` or `projectArtifacts`. Unknown kinds fail closed. |
 | `roots` | Caller binding plus a normalized relative `suffix`; never an environment variable. |
-| `markers` | Immediate single-component names in `all` and `any`; project scanners require markers. |
-| `targets`, `targetType` | Single-component names and `file`, `directory`, or `either`. |
+| `markers` | Immediate exact names in `all` and `any`, plus literal `anySuffix`; project scanners require at least one matcher. |
+| `targets`, `targetPrefixes`, `targetSuffixes`, `targetType` | Bounded single-component target matchers and `file`, `directory`, or `either`. |
 | `rootDepth` | Direct traversal ceiling. Maximum accepted depth is 64. |
 | `projectDepth`, `targetDepth` | Required project-discovery and artifact ceilings. |
 | `minimumAgeSeconds` | Minimum elapsed age; missing or future timestamps do not satisfy a positive age. |
 | `excludedNames`, `excludedPaths` | Case-insensitive components and normalized relative paths never emitted or entered. |
 
-Default limits are 256 rules, 16 roots per rule, 64 values per name field, 64 excluded paths, 512 UTF-8 bytes per text value, and depth 64. Empty targets, absolute paths, `..`, path separators in names, contradictory scanner fields, unknown artifact enum values, and duplicate IDs are invalid.
+Default limits are 256 rules, 16 roots per rule, 64 values per name field, 64 excluded paths, 512 UTF-8 bytes per text value, and depth 64. Missing marker or target matchers, empty literals, absolute paths, `..`, path separators in names, contradictory scanner fields, unknown artifact enum values, and duplicate IDs are invalid.
 
-Artifact metadata currently permits only `nodeJs`, `installedDependencies`, `rebuildable`, and `networkDownloadRequired`. These serialize as exact camel-case values; extending an enum requires schema fixtures and UI handling.
+Project artifact enums cover the ecosystems, artifact types, confidence levels, and rebuild consequences documented in the [project artifact guide](project-artifacts.md). They serialize as exact camel-case values; extending an enum requires schema fixtures, adapter tests, frontend handling, and documentation.
 
-## Node.js project discovery
+## Project artifact discovery
 
-The first production project rule requires an immediate `package.json` marker and discovers only a directory named `node_modules`. A generic directory name without that marker is not a candidate. Matched artifact trees are measured within limits but are not searched for nested project roots. Results remain unselected and read-only.
+The production catalog is embedded from `project-artifact-rules.json`; runtime user catalogs are not loaded. Its marker/target matrix and conservative exclusions are documented in the [project artifact guide](project-artifacts.md). The adapter automatically selects only `verified` and `stable` rules, and every production project rule remains unselected.
 
-The read-only adapter accepts one explicit absolute Windows root up to 4,096 UTF-8 bytes. It scans with at most 2 workers, 100,000 visited entries, 2,000 candidates, 100 diagnostics, 250,000 measurement entries, project depth 8, and target depth 0. It does not save the root or return a reusable scan identifier.
+Users save at most 32 explicit canonical roots in app-owned storage. All later root operations use opaque IDs. One-root scans use the exact active root; all-root scans omit active children already covered by active parents and divide fixed traversal, candidate, diagnostic, and measurement budgets across the request. Responses have no cleanup scan ID.
+
+## Registered build artifact proofs
+
+Build profiles do not add runtime catalog rules. After deterministic budget selection, Rust constructs one internal exact-component proof for each selected owned generation. The proof uses the generation parent as scan root, the saved project as context root, and binds root, profile, generation, path, type, identity, and measured bytes.
+
+Artifact plan scope defaults to `temporary` for backward compatibility. A `buildArtifact` scope is accepted only when every item carries matching live root and profile IDs plus a valid generation ID. Execution reloads the saved root, profile, registered generation path, role, ownership, and identity; persisted paths and rules never authorize themselves. Only recoverable quarantine is valid for artifact scope.
+
+The normal containment, reparse, activity, identity, exact target, measurement, journal, cross-volume quarantine, undo, and purge checks still run. Generic project markers are not required because native profile approval and the saved exact path provide the context grant. See [build artifact budgets](build-artifact-budgets.md).
 
 ## Lifecycle workflow
 

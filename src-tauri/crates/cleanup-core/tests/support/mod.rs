@@ -97,6 +97,15 @@ impl FixtureFs {
     pub fn make_inactive(&self, path: &Path) {
         self.state.lock().unwrap().active_paths.remove(path);
     }
+    pub fn set_modified(&self, path: &Path, modified: Option<SystemTime>) {
+        self.state
+            .lock()
+            .unwrap()
+            .metadata
+            .get_mut(path)
+            .unwrap()
+            .modified = modified;
+    }
     pub fn change_after(&self, path: impl Into<PathBuf>, calls: usize, change: FixtureChange) {
         self.state
             .lock()

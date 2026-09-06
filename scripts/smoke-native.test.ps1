@@ -176,10 +176,18 @@ public static class NativeSmokeFixture
     throw "Native smoke must configure hidden startup before launching the executable."
   }
   $projectSmokeSource = Get-Content -Path "$PSScriptRoot/smoke-project-discovery.ps1" -Raw
-  foreach ($required in @("Runtime.evaluate", "Page.captureScreenshot", "requestSubmit", "fixtureBefore", "fixtureAfter", "LocalApplicationData")) {
+  foreach ($required in @(
+    "Runtime.evaluate", "Page.captureScreenshot", "requestSubmit", "fixtureBefore",
+    "fixtureAfter", "LocalApplicationData", "Install-BuildArtifactSmokeAdapter",
+    "artifact-disabled-preview.png", "artifact-disabled-preview-320.png",
+    "artifact-running.png", "artifact-cancelled.png"
+  )) {
     if (-not $projectSmokeSource.Contains($required)) {
       throw "Native project discovery smoke is missing required packaged-WebView evidence: $required"
     }
+  }
+  if ($projectSmokeSource.Contains("register_build_profile")) {
+    throw "Native artifact smoke must not approve or persist a real executable profile."
   }
 
   Write-Output "Native smoke launch guards, process cleanup, WebView interaction, and evidence capture verified."

@@ -1,0 +1,169 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "rust-build-output", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": "Cargo build cache documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "rust", "artifactType": "buildOutput", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "toolchainRequired" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["Cargo.toml"] }, "targets": ["target"], "targetType": "directory",
+      "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "node-installed-dependencies", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": "npm local install documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "nodeJs", "artifactType": "installedDependencies", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "networkDownloadRequired" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["package.json"] }, "targets": ["node_modules"], "targetType": "directory",
+      "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "nextjs-generated", "ruleVersion": 1, "lifecycle": "verified", "risk": "recoverable",
+      "provenance": { "source": "Next.js output documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "nextJs", "artifactType": "frameworkCache", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "localRebuild" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["package.json"], "any": ["next.config.js", "next.config.mjs", "next.config.ts"] },
+      "targets": [".next", "out"], "targetType": "directory", "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "angular-generated", "ruleVersion": 1, "lifecycle": "verified", "risk": "recoverable",
+      "provenance": { "source": "Angular CLI cache documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "angular", "artifactType": "frameworkCache", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "localRebuild" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["package.json", "angular.json"] }, "targets": [".angular"], "targetType": "directory",
+      "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "nuxt-generated", "ruleVersion": 1, "lifecycle": "verified", "risk": "recoverable",
+      "provenance": { "source": "Nuxt cleanup documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "nuxt", "artifactType": "frameworkCache", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "localRebuild" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["package.json"], "any": ["nuxt.config.ts", "nuxt.config.js", "nuxt.config.mjs"] },
+      "targets": [".nuxt", ".output"], "targetType": "directory", "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "vite-generated", "ruleVersion": 1, "lifecycle": "verified", "risk": "recoverable",
+      "provenance": { "source": "Vite cache and build documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "vite", "artifactType": "buildOutput", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "localRebuild" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["package.json"], "any": ["vite.config.js", "vite.config.mjs", "vite.config.ts", "vite.config.cjs", "vite.config.mts", "vite.config.cts"] },
+      "targets": [".vite", "dist"], "targetType": "directory", "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "sveltekit-generated", "ruleVersion": 1, "lifecycle": "verified", "risk": "recoverable",
+      "provenance": { "source": "SvelteKit generated files documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "svelteKit", "artifactType": "frameworkCache", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "localRebuild" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["package.json"], "any": ["svelte.config.js", "svelte.config.cjs"] },
+      "targets": [".svelte-kit", "build"], "targetType": "directory", "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "astro-generated", "ruleVersion": 1, "lifecycle": "verified", "risk": "recoverable",
+      "provenance": { "source": "Astro cache and output documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "astro", "artifactType": "frameworkCache", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "localRebuild" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["package.json"], "any": ["astro.config.mjs", "astro.config.js", "astro.config.ts"] },
+      "targets": [".astro", "dist"], "targetType": "directory", "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "python-environments", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": "Python virtual environment documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "python", "artifactType": "virtualEnvironment", "confidence": "medium", "recoverability": "rebuildable", "rebuildConsequence": "networkDownloadRequired" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "any": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"] },
+      "targets": [".venv", "venv"], "targetType": "directory", "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "python-caches", "ruleVersion": 1, "lifecycle": "stable", "risk": "safe",
+      "provenance": { "source": "Python tool cache documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "python", "artifactType": "compilerCache", "confidence": "medium", "recoverability": "rebuildable", "rebuildConsequence": "localRebuild" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "any": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"] },
+      "targets": ["__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox"], "targetType": "directory",
+      "rootDepth": 0, "projectDepth": 12, "targetDepth": 8, "excludedNames": [".git", ".venv", "venv"]
+    },
+    {
+      "id": "python-build-output", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": "Python packaging documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "python", "artifactType": "buildOutput", "confidence": "medium", "recoverability": "rebuildable", "rebuildConsequence": "localRebuild" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "any": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"] },
+      "targets": ["build", "dist"], "targetSuffixes": [".egg-info"], "targetType": "directory",
+      "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "dotnet-generated", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": ".NET build output documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "dotNet", "artifactType": "buildOutput", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "toolchainRequired" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "anySuffix": [".csproj", ".fsproj", ".vbproj", ".sln", ".slnx"] },
+      "targets": ["bin", "obj"], "targetType": "directory", "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "gradle-generated", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": "Gradle directory layout documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "gradle", "artifactType": "buildOutput", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "localRebuild" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "any": ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"] },
+      "targets": [".gradle", "build", "outputs"], "targetType": "directory", "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "maven-generated", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": "Maven directory layout documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "maven", "artifactType": "buildOutput", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "localRebuild" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["pom.xml"] }, "targets": ["target"], "targetType": "directory",
+      "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "cmake-generated", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": "CMake build tree documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "cmake", "artifactType": "buildOutput", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "toolchainRequired" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["CMakeLists.txt"] }, "targets": ["build", "out"], "targetPrefixes": ["cmake-build-"], "targetType": "directory",
+      "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "unity-generated", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": "Unity project directory documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "unity", "artifactType": "importedAssetCache", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "expensiveReimport" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["Assets", "ProjectSettings"] }, "targets": ["Library", "Temp", "obj"], "targetType": "directory",
+      "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "unreal-generated", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": "Unreal project directory documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "unreal", "artifactType": "generatedIntermediate", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "toolchainRequired" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "anySuffix": [".uproject"] }, "targets": ["Binaries", "DerivedDataCache", "Intermediate"], "targetType": "directory",
+      "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    },
+    {
+      "id": "godot-imports", "ruleVersion": 1, "lifecycle": "stable", "risk": "recoverable",
+      "provenance": { "source": "Godot imported files documentation", "verifiedAt": "2026-09-03" },
+      "defaultSelected": false,
+      "artifact": { "ecosystem": "godot", "artifactType": "importedAssetCache", "confidence": "high", "recoverability": "rebuildable", "rebuildConsequence": "expensiveReimport" },
+      "scanner": "projectArtifacts", "roots": [{ "binding": "projectRoot", "suffix": "" }],
+      "markers": { "all": ["project.godot"] }, "targets": [".godot"], "targetType": "directory",
+      "rootDepth": 0, "projectDepth": 12, "targetDepth": 0, "excludedNames": [".git"]
+    }
+  ]
+}

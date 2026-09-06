@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { ArtifactBudgetSettings } from "../build-artifacts/ArtifactBudgetSettings";
 import { useSettingsState } from "./model/useSettingsState";
 
 export function SettingsPage() {
@@ -95,6 +96,7 @@ export function SettingsPage() {
           </form>
         )}
       </div>
+      <ArtifactBudgetSettings />
     </section>
   );
 }

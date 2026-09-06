@@ -19,6 +19,7 @@ pub(crate) struct CandidateDraft {
     pub rule: CleanupRule,
     pub scan_root: PathBuf,
     pub context_root: PathBuf,
+    pub context_identity: crate::FileIdentity,
     pub path: PathBuf,
     pub kind: EntryKind,
     pub identity: crate::FileIdentity,
@@ -219,15 +220,58 @@ pub(crate) fn excluded(
         .any(|excluded| semantics.equivalent(excluded, relative))
 }
 
+pub(crate) fn marker_matches(
+    rule: &CleanupRule,
+    names: &std::collections::HashSet<String>,
+) -> bool {
+    rule.markers
+        .all
+        .iter()
+        .all(|marker| names.contains(&marker.to_ascii_lowercase()))
+        && (rule.markers.any.is_empty()
+            || rule
+                .markers
+                .any
+                .iter()
+                .any(|marker| names.contains(&marker.to_ascii_lowercase())))
+        && (rule.markers.any_suffix.is_empty()
+            || rule.markers.any_suffix.iter().any(|suffix| {
+                names
+                    .iter()
+                    .any(|name| name.ends_with(&suffix.to_ascii_lowercase()))
+            }))
+}
+
 pub(crate) fn target_matches(rule: &CleanupRule, name: &str, kind: EntryKind) -> bool {
-    rule.targets
+    (rule
+        .targets
         .iter()
         .any(|target| target.eq_ignore_ascii_case(name))
+        || rule
+            .target_prefixes
+            .iter()
+            .any(|prefix| name.len() > prefix.len() && starts_with_ignore_ascii_case(name, prefix))
+        || rule
+            .target_suffixes
+            .iter()
+            .any(|suffix| name.len() > suffix.len() && ends_with_ignore_ascii_case(name, suffix)))
         && match rule.target_type {
             crate::TargetType::File => kind == EntryKind::File,
             crate::TargetType::Directory => kind == EntryKind::Directory,
             crate::TargetType::Either => matches!(kind, EntryKind::File | EntryKind::Directory),
         }
+}
+
+fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
+    value
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+}
+
+fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
+    value
+        .get(value.len().saturating_sub(suffix.len())..)
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
 }
 
 pub(crate) fn old_enough(
