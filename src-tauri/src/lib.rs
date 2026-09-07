@@ -20,6 +20,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(|_| std::io::Error::other("cleanup service initialization failed"))?,
             );
             app.manage(Arc::clone(&cleanup_service));
+            app.manage(Arc::new(commands::drives::DriveInventoryState::default()));
             let maintenance_service = Arc::clone(&cleanup_service);
             tauri::async_runtime::spawn_blocking(move || {
                 let _ = maintenance_service.run_maintenance();
@@ -71,6 +72,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::build_artifacts::get_artifact_budget_policy,
             commands::build_artifacts::set_artifact_budget_policy,
             commands::build_artifacts::preview_artifact_budgets,
+            commands::drives::list_drive_inventory,
             commands::foundation::foundation_status,
             commands::security::create_system_restore_point
         ])

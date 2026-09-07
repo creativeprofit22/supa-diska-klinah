@@ -1,4 +1,15 @@
 fn main() {
+    // tauri-winres embeds resources only in binaries. The IPC test target also
+    // imports Common Controls v6 (TaskDialogIndirect), so it needs our manifest.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        let manifest =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("windows-app-manifest.xml");
+        println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
+        println!(
+            "cargo:rustc-link-arg-tests=/MANIFESTINPUT:{}",
+            manifest.display()
+        );
+    }
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .app_manifest(tauri_build::AppManifest::new().commands(&[
@@ -25,6 +36,7 @@ fn main() {
                 "get_artifact_budget_policy",
                 "set_artifact_budget_policy",
                 "preview_artifact_budgets",
+                "list_drive_inventory",
                 "foundation_status",
                 "create_system_restore_point",
             ]))

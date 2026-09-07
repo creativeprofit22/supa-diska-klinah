@@ -28,6 +28,7 @@
     "allow-get-artifact-budget-policy",
     "allow-set-artifact-budget-policy",
     "allow-preview-artifact-budgets",
+    "allow-list-drive-inventory",
     "allow-foundation-status",
     "allow-create-system-restore-point"
   ],

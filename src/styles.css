@@ -479,6 +479,40 @@ h2 {
   font-size: 0.875rem;
 }
 
+.drive-inventory {
+  max-width: 52rem;
+}
+
+.drive-inventory .page-header {
+  align-items: start;
+}
+
+.drive-inventory .status-message {
+  margin-block-end: 1rem;
+}
+
+.drive-list {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.drive-list .status-panel {
+  max-width: none;
+}
+
+.drive-inventory .readiness-heading {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
+.drive-inventory .cleanup-state-panel {
+  margin-block-end: 1rem;
+  overflow-wrap: anywhere;
+}
+
 .cleanup-selection {
   display: flex;
   align-items: start;
@@ -980,7 +1014,7 @@ dialog::backdrop {
   }
 
   nav {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   main {

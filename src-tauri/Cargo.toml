@@ -21,6 +21,9 @@ tauri = { version = "=2.11.5", features = [] }
 windows-platform = { path = "crates/windows-platform" }
 tokio = { version = "=1.53.1", features = ["time"] }
 
+[dev-dependencies]
+tauri = { version = "=2.11.5", features = ["test"] }
+
 [workspace]
 members = [
   "crates/cleanup-core",
