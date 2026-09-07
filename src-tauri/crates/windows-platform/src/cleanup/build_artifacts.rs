@@ -330,80 +330,107 @@ fn resume_process(process_id: u32) -> Result<(), BuildArtifactError> {
 }
 
 fn stop_process_job(job: &OwnedHandle, child: &mut Child) -> Result<(), BuildArtifactError> {
-    // Job accounting can reach zero before terminated process handles are signalled.
-    // Drain one retained process at a time instead of terminating the job first, which
-    // would lose the handles we must wait on. Re-query to include racing descendants.
+    // Retain the complete snapshot before terminating anything: killing Cargo closes
+    // its nested job and can remove descendants from the list before they signal.
+    // Wait on every retained handle, then re-query for racing descendants.
     let deadline = Instant::now() + Duration::from_secs(5);
+    let header_words =
+        std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) / size_of::<usize>();
+    let mut buffer = vec![0usize; header_words + 16];
     loop {
         if Instant::now() >= deadline {
             return Err(BuildArtifactError::OperationFailed);
         }
-        let mut processes = JOBOBJECT_BASIC_PROCESS_ID_LIST::default();
-        // SAFETY: job is live and processes includes space for one process ID.
+        let bytes = u32::try_from(buffer.len() * size_of::<usize>())
+            .map_err(|_| BuildArtifactError::OperationFailed)?;
+        // SAFETY: the usize buffer is aligned for the header and variable-length IDs.
         let queried = unsafe {
             QueryInformationJobObject(
                 job.as_raw_handle() as HANDLE,
                 JobObjectBasicProcessIdList,
-                (&raw mut processes).cast(),
-                size_of::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() as u32,
+                buffer.as_mut_ptr().cast(),
+                bytes,
                 std::ptr::null_mut(),
             )
         };
-        // MORE_DATA still provides the first ID; we deliberately drain a bounded batch.
-        // SAFETY: read the error immediately after the failed query.
-        if queried == 0 && unsafe { GetLastError() } != ERROR_MORE_DATA {
+        if queried == 0 {
+            // SAFETY: read the error immediately after the failed query.
+            if unsafe { GetLastError() } != ERROR_MORE_DATA {
+                return Err(BuildArtifactError::OperationFailed);
+            }
+            let growth = buffer.len();
+            buffer
+                .try_reserve_exact(growth)
+                .map_err(|_| BuildArtifactError::OperationFailed)?;
+            buffer.resize(buffer.len() + growth, 0);
+            continue;
+        }
+        // SAFETY: the successful query initialized a properly aligned, full header.
+        let processes = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+        let count = processes.NumberOfProcessIdsInList as usize;
+        if count != processes.NumberOfAssignedProcesses as usize
+            || count > buffer.len() - header_words
+        {
             return Err(BuildArtifactError::OperationFailed);
         }
-        if processes.NumberOfProcessIdsInList == 0 {
+        if count == 0 {
             return child
                 .wait()
                 .map(|_| ())
                 .map_err(|_| BuildArtifactError::OperationFailed);
         }
-        // SAFETY: this ID came from the job, but membership is checked again below.
-        let raw_process = unsafe {
-            OpenProcess(
-                PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
-                0,
-                processes.ProcessIdList[0] as u32,
-            )
-        };
-        if raw_process.is_null() {
-            // SAFETY: read the error immediately after OpenProcess failed.
-            if unsafe { GetLastError() } == ERROR_INVALID_PARAMETER {
-                continue; // The process exited between enumeration and opening its handle.
+        let mut retained = Vec::new();
+        for &pid in &buffer[header_words..header_words + count] {
+            // SAFETY: this ID came from the job, but membership is checked again below.
+            let raw_process = unsafe {
+                OpenProcess(
+                    PROCESS_TERMINATE | PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                    0,
+                    pid as u32,
+                )
+            };
+            if raw_process.is_null() {
+                // SAFETY: read the error immediately after OpenProcess failed.
+                if unsafe { GetLastError() } == ERROR_INVALID_PARAMETER {
+                    continue; // The process exited between enumeration and opening its handle.
+                }
+                return Err(BuildArtifactError::OperationFailed);
             }
-            return Err(BuildArtifactError::OperationFailed);
+            // SAFETY: OpenProcess returned an owned handle.
+            let process = unsafe { OwnedHandle::from_raw_handle(raw_process) };
+            let mut in_job = 0;
+            // SAFETY: both handles and the output pointer are live.
+            if unsafe {
+                IsProcessInJob(
+                    process.as_raw_handle() as HANDLE,
+                    job.as_raw_handle() as HANDLE,
+                    &mut in_job,
+                )
+            } == 0
+            {
+                return Err(BuildArtifactError::OperationFailed);
+            }
+            if in_job == 0 {
+                continue; // Never terminate an unrelated process after PID reuse.
+            }
+            retained.push(process);
         }
-        // SAFETY: OpenProcess returned an owned handle.
-        let process = unsafe { OwnedHandle::from_raw_handle(raw_process) };
-        let mut in_job = 0;
-        // SAFETY: both handles and the output pointer are live.
-        if unsafe {
-            IsProcessInJob(
-                process.as_raw_handle() as HANDLE,
-                job.as_raw_handle() as HANDLE,
-                &mut in_job,
-            )
-        } == 0
-        {
-            return Err(BuildArtifactError::OperationFailed);
+        for process in &retained {
+            // SAFETY: the retained process is a member of our private, non-breakaway job.
+            // An already exiting process may reject termination; only a signalled handle
+            // below establishes success, not the termination request or job accounting.
+            unsafe { TerminateProcess(process.as_raw_handle() as HANDLE, 1) };
         }
-        if in_job == 0 {
-            continue; // Never terminate an unrelated process after PID reuse.
-        }
-        // SAFETY: the retained process is a member of our private, non-breakaway job.
-        // An already exiting process may reject termination; only a signalled handle
-        // below establishes success, not the termination request or job accounting.
-        unsafe { TerminateProcess(process.as_raw_handle() as HANDLE, 1) };
-        let remaining = deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis() as u32;
-        // SAFETY: the handle stays live throughout the bounded wait.
-        if unsafe { WaitForSingleObject(process.as_raw_handle() as HANDLE, remaining) }
-            != WAIT_OBJECT_0
-        {
-            return Err(BuildArtifactError::OperationFailed);
+        for process in &retained {
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis() as u32;
+            // SAFETY: the handle stays live throughout the bounded wait.
+            if unsafe { WaitForSingleObject(process.as_raw_handle() as HANDLE, remaining) }
+                != WAIT_OBJECT_0
+            {
+                return Err(BuildArtifactError::OperationFailed);
+            }
         }
     }
 }
