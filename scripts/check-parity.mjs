@@ -75,4 +75,19 @@ function verifyInventory(rows, expected, label) {
 
 verifyInventory(moduleRows, modules, "registered module");
 verifyInventory(directRows, directGroups, "direct handler");
+const storageRows = rowsAfter(
+  "| Storage feature | Pinned source | Supported behavior | Exclusions and adaptations | Required fixtures | Implementation status | Verification status |",
+);
+verifyInventory(storageRows, [
+  "Rule cleaner", "Disk analyzer", "Large files", "Duplicates", "Empty folders",
+  "Application uninstaller", "Browser cache cleanup", "Drive inventory",
+], "storage capability");
+for (const row of storageRows) {
+  if (!row[1].includes("src/main/ipc/") || !row[4].includes("storage_parity::")) {
+    fail(`storage capability needs pinned source and parity fixture mapping: ${row[0]}`);
+  }
+  if (row[6] === "Verified" && row[5] !== "Implemented") {
+    fail(`unimplemented storage capability cannot be verified: ${row[0]}`);
+  }
+}
 console.log("Kudu parity contract verified.");
