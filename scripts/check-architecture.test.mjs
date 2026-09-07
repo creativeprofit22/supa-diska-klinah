@@ -64,6 +64,31 @@ test("architecture scanner boundaries", async (t) => {
     });
   }
 
+  for (const [name, source] of [
+    ["std Command", 'fn forbidden() { std::process::Command::new("fixture"); }'],
+    ["aliased std Command", 'use std::process::{Command as Other};'],
+    ["aliased process module", 'use std::process as other;'],
+    ["ShellExecuteExW", 'use windows_sys::Win32::UI::Shell::ShellExecuteExW as Other;'],
+    ["ShellExecuteA", 'unsafe extern "system" { fn ShellExecuteA(); }'],
+    ["CreateProcessW", 'unsafe extern "system" { fn CreateProcessW(); }'],
+    ["CreateProcessAsUserW", 'unsafe extern "system" { fn CreateProcessAsUserW(); }'],
+    ["WinExec", 'unsafe extern "system" { fn WinExec(); }'],
+    ["NtCreateUserProcess", 'unsafe extern "system" { fn NtCreateUserProcess(); }'],
+  ]) {
+    for (const path of [
+      "src-tauri/crates/windows-platform/src/storage/vendor-owner-copy.rs",
+      "src-tauri/crates/windows-platform/tests/fixtures/vendor-owner-copy.rs",
+      "src-tauri/crates/cleanup-core/src/vendor-owner-copy.rs",
+    ]) {
+      await t.test(`rejects ${name} outside exact owner at ${path}`, () => {
+        const destination = resolve(sandbox, path);
+        writeFileSync(destination, source);
+        try { const result = scan(); assert.equal(result.status, 1, result.stdout); assert.match(result.stderr, /forbidden (?:runtime|native) process execution/); }
+        finally { rmSync(destination); }
+      });
+    }
+  }
+
   const importer = resolve(sandbox, "src/features/build-artifacts/profileValidation.test.ts");
   const otherFeature = resolve(sandbox, "src/features/other/value.ts");
   mkdirSync(dirname(importer), { recursive: true });

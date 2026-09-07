@@ -27,6 +27,8 @@ const MAX_STRING_BYTES: usize = 1_024;
 const MAX_ARGUMENT_BYTES: usize = 4_096;
 const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
 const SCHEMA_VERSION: u32 = 1;
+// Only cleanup plans gain extended evidence. Journals/history retain schema 1.
+const PLAN_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +50,10 @@ pub struct PlanItem {
 pub enum CleanupPlanScope {
     #[default]
     Temporary,
+    Storage {
+        module: cleanup_core::storage::StorageModule,
+        root: cleanup_core::storage::RootAuthorization,
+    },
     BuildArtifact {
         root_id: String,
         profile_id: String,
@@ -106,7 +112,7 @@ impl CleanupPlan {
         )
     }
 
-    fn with_scope(
+    pub(super) fn with_scope(
         plan_id: String,
         scan_id: String,
         created_at: u64,
@@ -115,7 +121,7 @@ impl CleanupPlan {
         items: Vec<PlanItem>,
     ) -> Result<Self, StorageError> {
         let plan = Self {
-            schema_version: SCHEMA_VERSION,
+            schema_version: PLAN_SCHEMA_VERSION,
             plan_id,
             scan_id,
             created_at,
@@ -129,6 +135,27 @@ impl CleanupPlan {
 
     pub fn validate(&self) -> Result<(), StorageError> {
         let scope_valid = match &self.scope {
+            CleanupPlanScope::Storage { module, root } => {
+                self.schema_version == PLAN_SCHEMA_VERSION
+                    && root.validate().is_ok()
+                    && root.snapshot_id == self.scan_id
+                    && self.disposition != CleanupDisposition::Quarantine
+                    && self.items.iter().all(|item| match &item.proof.scope {
+                        CandidateProofScope::Storage { evidence } => {
+                            evidence.validate().is_ok()
+                                && evidence.module() == *module
+                                && evidence.root() == root
+                                && evidence.entry().canonical_path == item.proof.path
+                                && evidence.entry().identity == item.proof.identity
+                                && evidence.entry().kind == item.proof.kind
+                                && evidence.entry().logical_bytes == item.proof.logical_bytes
+                                && evidence.entry().allocated_bytes
+                                    == Some(item.proof.allocated_bytes)
+                                && item.proof.scan_root == root.canonical_path
+                        }
+                        _ => false,
+                    })
+            }
             CleanupPlanScope::Temporary => self
                 .items
                 .iter()
@@ -154,7 +181,7 @@ impl CleanupPlan {
                     })
             }
         };
-        if self.schema_version != SCHEMA_VERSION
+        if !matches!(self.schema_version, SCHEMA_VERSION | PLAN_SCHEMA_VERSION)
             || !valid_id(&self.plan_id)
             || !valid_id(&self.scan_id)
             || self.items.is_empty()
@@ -172,6 +199,48 @@ impl CleanupPlan {
         let mut ids = std::collections::HashSet::new();
         if !self.items.iter().all(|item| ids.insert(&item.item_id)) {
             return Err(StorageError::Invalid);
+        }
+        if matches!(self.scope, CleanupPlanScope::Storage { .. }) {
+            let semantics = cleanup_core::PathSemantics::CaseInsensitive;
+            for (index, item) in self.items.iter().enumerate() {
+                if let CandidateProofScope::Storage { evidence } = &item.proof.scope
+                    && let cleanup_core::storage::StorageEvidence::EmptyFolder {
+                        descendant_directories,
+                        ..
+                    } = evidence.as_ref()
+                {
+                    // A parent's complete proof includes every required descendant, not just leaves.
+                    // Count only earlier (deepest-first), strict descendants in this same scope.
+                    let selected = self.items[..index]
+                        .iter()
+                        .filter(|child| {
+                            !semantics.equivalent(&item.proof.path, &child.proof.path)
+                                && semantics.contains(&item.proof.path, &child.proof.path)
+                        })
+                        .count();
+                    if selected != *descendant_directories as usize {
+                        return Err(StorageError::Invalid);
+                    }
+                }
+                for other in &self.items[..index] {
+                    let bottom_up_empty = matches!(
+                        (&item.proof.scope, &other.proof.scope),
+                        (
+                            CandidateProofScope::Storage { evidence: parent },
+                            CandidateProofScope::Storage { evidence: child }
+                        ) if matches!(parent.as_ref(), cleanup_core::storage::StorageEvidence::EmptyFolder { .. })
+                            && matches!(child.as_ref(), cleanup_core::storage::StorageEvidence::EmptyFolder { .. })
+                    ) && other.proof.path.components().count()
+                        > item.proof.path.components().count();
+                    if item.proof.identity == other.proof.identity
+                        || (!bottom_up_empty
+                            && (semantics.contains(&item.proof.path, &other.proof.path)
+                                || semantics.contains(&other.proof.path, &item.proof.path)))
+                    {
+                        return Err(StorageError::Invalid);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -629,7 +698,7 @@ impl CleanupStorage {
     }
 
     #[cfg(test)]
-    pub(super) fn fail_write(&self, write_number: usize) {
+    pub(crate) fn fail_write(&self, write_number: usize) {
         assert!(write_number > 0);
         *self.write_failure_countdown.lock().unwrap() = Some(write_number);
     }
@@ -650,6 +719,21 @@ impl CleanupStorage {
         }
     }
 
+    // Vendor jobs reuse the same bounded, native atomic writer; callers hold the shared writer.
+    pub(crate) fn read_vendor_jobs<T: DeserializeOwned>(&self) -> Result<Option<T>, StorageError> {
+        let path = self.root.join("vendor-jobs.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+        read_json(&path).map(Some)
+    }
+
+    pub(crate) fn write_vendor_jobs<T: Serialize>(&self, jobs: &T) -> Result<(), StorageError> {
+        #[cfg(test)]
+        self.check_write_failure()?;
+        write_json(&self.root.join("vendor-jobs.json"), jobs, true)
+    }
+
     pub fn create_plan(&self, plan: &CleanupPlan) -> Result<(), StorageError> {
         plan.validate()?;
         write_json(&self.id_path("plans", &plan.plan_id)?, plan, false)
@@ -666,6 +750,8 @@ impl CleanupStorage {
 
     pub fn write_execution(&self, journal: &ExecutionJournal) -> Result<(), StorageError> {
         journal.validate()?;
+        #[cfg(test)]
+        self.check_write_failure()?;
         write_json(
             &self.id_path("executions", &journal.execution_id)?,
             journal,
@@ -689,6 +775,10 @@ impl CleanupStorage {
     ) -> Result<(), StorageError> {
         plan.validate()?;
         journal.validate()?;
+        if matches!(plan.scope, CleanupPlanScope::Storage { .. }) {
+            // Storage recovery needs current scope/identity validation; never use legacy inference.
+            return Err(StorageError::Invalid);
+        }
         if plan.plan_id != journal.plan_id || plan.items.len() != journal.items.len() {
             return Err(StorageError::Invalid);
         }
@@ -1042,6 +1132,152 @@ mod tests {
         );
         fs::write(root.join("project-roots.json"), b"{bad").unwrap();
         assert_eq!(storage.project_roots(), Err(StorageError::Invalid));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn all_storage_evidence_variants_persist_as_schema_two_only() {
+        let fixtures: Vec<cleanup_core::storage::StorageEvidence> = serde_json::from_str(
+            include_str!("../../../cleanup-core/src/storage/fixtures/evidence-v2.json"),
+        )
+        .unwrap();
+        assert_eq!(fixtures.len(), 6);
+        let record_root = temp();
+        let storage = CleanupStorage::open(record_root.clone()).unwrap();
+        for (index, evidence) in fixtures.into_iter().enumerate() {
+            let mut plan: CleanupPlan =
+                serde_json::from_str(include_str!("fixtures/plan-v1-temporary.json")).unwrap();
+            plan.plan_id = format!("{:032x}", index + 10);
+            plan.schema_version = 2;
+            plan.scan_id = evidence.root().snapshot_id.clone();
+            let proof = &mut plan.items[0].proof;
+            proof.path = evidence.entry().canonical_path.clone();
+            proof.scan_root = evidence.root().canonical_path.clone();
+            proof.context_root = proof.scan_root.clone();
+            proof.context_identity = Some(evidence.root().identity);
+            proof.identity = evidence.entry().identity;
+            proof.kind = evidence.entry().kind;
+            proof.logical_bytes = evidence.entry().logical_bytes;
+            proof.allocated_bytes = evidence.entry().allocated_bytes.unwrap();
+            plan.scope = CleanupPlanScope::Storage {
+                module: evidence.module(),
+                root: evidence.root().clone(),
+            };
+            proof.scope = CandidateProofScope::Storage {
+                evidence: Box::new(evidence),
+            };
+            storage.create_plan(&plan).unwrap();
+            let restored = storage.read_plan(&plan.plan_id).unwrap();
+            assert_eq!(
+                serde_json::to_value(&restored).unwrap(),
+                serde_json::to_value(&plan).unwrap()
+            );
+            plan.schema_version = 1;
+            assert!(plan.validate().is_err());
+            plan.schema_version = 2;
+            plan.items[0].proof.scope = CandidateProofScope::Temporary;
+            assert!(plan.validate().is_err());
+        }
+        fs::remove_dir_all(record_root).unwrap();
+    }
+
+    #[test]
+    fn storage_extended_schema_round_trips_without_legacy_coercion() {
+        use cleanup_core::storage::{
+            ObservedEntry, RootAuthorization, StorageEvidence, StorageModule,
+        };
+        let mut plan: CleanupPlan =
+            serde_json::from_str(include_str!("fixtures/plan-v1-temporary.json")).unwrap();
+        for version in [0, 3, u32::MAX] {
+            plan.schema_version = version;
+            assert!(plan.validate().is_err());
+        }
+        let root = RootAuthorization {
+            snapshot_id: plan.scan_id.clone(),
+            root_id: "a".repeat(32),
+            canonical_path: plan.items[0].proof.scan_root.clone(),
+            identity: FileIdentity { volume: 1, file: 2 },
+        };
+        let entry = ObservedEntry {
+            canonical_path: plan.items[0].proof.path.clone(),
+            identity: plan.items[0].proof.identity,
+            kind: cleanup_core::EntryKind::File,
+            logical_bytes: 0,
+            allocated_bytes: Some(0),
+            modified_unix_nanos: 0,
+        };
+        plan.items[0].proof.kind = cleanup_core::EntryKind::File;
+        plan.items[0].proof.scope = CandidateProofScope::Storage {
+            evidence: Box::new(StorageEvidence::UserSelectedFile {
+                root: root.clone(),
+                entry,
+            }),
+        };
+        plan.scope = CleanupPlanScope::Storage {
+            module: StorageModule::LargeFiles,
+            root,
+        };
+        plan.schema_version = 1;
+        assert!(plan.validate().is_err());
+        plan.schema_version = 2;
+        plan.validate().unwrap();
+        let record_root = temp();
+        let storage = CleanupStorage::open(record_root.clone()).unwrap();
+        storage.create_plan(&plan).unwrap();
+        let _: CleanupPlan = serde_json::from_str(&serde_json::to_string(&plan).unwrap()).unwrap();
+        let restored = storage.read_plan(&plan.plan_id).unwrap();
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            serde_json::to_value(&plan).unwrap()
+        );
+        let mut journal: ExecutionJournal =
+            serde_json::from_str(include_str!("fixtures/journal-v1-mutating.json")).unwrap();
+        assert_eq!(
+            storage.reconcile(&plan, &mut journal),
+            Err(StorageError::Invalid)
+        );
+        assert_eq!(journal.items[0].state, ItemState::Mutating);
+        journal.schema_version = 2;
+        assert!(journal.validate().is_err());
+        plan.scope = CleanupPlanScope::Temporary;
+        assert!(plan.validate().is_err());
+        let mut value = serde_json::to_value(&restored).unwrap();
+        value["items"][0]["proof"]["scope"]["evidence"]["module"] = "unknownModule".into();
+        assert!(serde_json::from_value::<CleanupPlan>(value).is_err());
+        fs::remove_dir_all(record_root).unwrap();
+    }
+
+    #[test]
+    fn storage_v1_fixtures_preserve_scope_and_interrupted_state() {
+        let temporary: CleanupPlan =
+            serde_json::from_str(include_str!("fixtures/plan-v1-temporary.json")).unwrap();
+        temporary.validate().unwrap();
+        assert_eq!(temporary.scope, CleanupPlanScope::Temporary);
+        assert_eq!(
+            temporary.items[0].proof.scope,
+            CandidateProofScope::Temporary
+        );
+        assert_eq!(temporary.items[0].proof.context_identity, None);
+        let build: CleanupPlan =
+            serde_json::from_str(include_str!("fixtures/plan-v1-build-artifact.json")).unwrap();
+        build.validate().unwrap();
+        assert!(matches!(
+            build.scope,
+            CleanupPlanScope::BuildArtifact { .. }
+        ));
+        assert!(matches!(
+            build.items[0].proof.scope,
+            CandidateProofScope::RegisteredBuildArtifact { .. }
+        ));
+        let mut journal: ExecutionJournal =
+            serde_json::from_str(include_str!("fixtures/journal-v1-mutating.json")).unwrap();
+        journal.validate().unwrap();
+        assert_eq!(journal.items[0].state, ItemState::Mutating);
+        let root = temp();
+        let storage = CleanupStorage::open(root.clone()).unwrap();
+        storage.reconcile(&temporary, &mut journal).unwrap();
+        assert_eq!(journal.items[0].state, ItemState::Unknown);
+        assert!(!journal.items[0].processed);
         fs::remove_dir_all(root).unwrap();
     }
 

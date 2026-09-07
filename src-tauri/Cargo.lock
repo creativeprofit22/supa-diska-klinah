@@ -4202,6 +4202,7 @@ dependencies = [
  "junction",
  "serde",
  "serde_json",
+ "sha2",
  "trash",
  "windows-sys 0.61.2",
  "zeroize",

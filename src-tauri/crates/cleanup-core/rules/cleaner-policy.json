@@ -1,0 +1,21 @@
+{
+  "revision": "db09e051d0615121e659db187e3799438acbc9e6",
+  "ruleVersion": 1,
+  "minimumAgeSeconds": 3600,
+  "lifecycle": "candidate",
+  "riskClass": "highImpact",
+  "risk": "File-only cleanup. Caches rebuild or downloads recur; logs and diagnostics cannot be recovered. Close the owning application. Never removes directories, runs maintenance commands, or clears attributes/locks.",
+  "exclusions": [".git", ".hg", ".svn", "Cookies", "Login Data", "Bookmarks", "History", "Sessions", "Extensions", "IndexedDB", "Local Storage", "Service Worker", "credentials", "credentials.json", "config.json", "settings.json", "auth.json", "token", "tokens", "saves", "worlds", "mods"],
+  "protectedRoots": {
+    "windows": "Windows servicing/service-owned filesystem target: administrator authority and service lifecycle are not implemented; no deletion offered.",
+    "programData": "Machine-wide shared cache/log target: administrator authority and cross-user ownership are not implemented; no deletion offered.",
+    "programFiles": "Installed-program tree: no administrator or installed-program deletion authority; no deletion offered.",
+    "programFilesX86": "Installed-program tree: no administrator or installed-program deletion authority; no deletion offered.",
+    "systemDrive": "Previous Windows installation rollback data: native servicing/rollback cleanup is not implemented; never remove recursively."
+  },
+  "unsupportedOperations": [
+    ["vendor-maintenance-commands", "Command execution is outside filesystem cleanup scope."],
+    ["steam:redistributables", "Pinned steam.json library hints and redistributable patterns are individually excluded in the Steam catalog: installed-program repair prerequisites are not disposable caches."],
+    ["databases:vacuum", "SQLite maintenance is not file cleanup; no database/sidecar deletion or command fallback."]
+  ]
+}

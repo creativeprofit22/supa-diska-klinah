@@ -1,0 +1,14 @@
+{
+  "id":"gpu-caches", "source":"rules/win32/gpu-cache.json",
+  "targets":[
+    {"id":"nvidia-gl","paths":["local/NVIDIA/GLCache"]},
+    {"id":"nvidia-dx","paths":["local/NVIDIA/DXCache"]},
+    {"id":"nvidia-legacy","paths":["local/NVIDIA Corporation/NV_Cache"]},
+    {"id":"nvidia-shared","paths":["programData/NVIDIA Corporation/NV_Cache"]},
+    {"id":"amd-dx","paths":["local/AMD/DxCache"]},
+    {"id":"amd-gl","paths":["local/AMD/GLCache"]},
+    {"id":"amd-vk","paths":["local/AMD/VkCache"]},
+    {"id":"intel","paths":["local/Intel/ShaderCache"]},
+    {"id":"unity-cache","paths":["local/Unity/cache"]}
+  ]
+}

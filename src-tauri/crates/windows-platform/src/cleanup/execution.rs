@@ -103,6 +103,10 @@ pub struct CleanupService {
     scans: Mutex<HashMap<String, RetainedScan>>,
     writer: Arc<Mutex<()>>,
     artifact_builds: BuildArtifactManager,
+    vendor_jobs: Result<
+        crate::storage::vendor_uninstall::VendorJobManager,
+        crate::storage::vendor_uninstall::VendorJobError,
+    >,
 }
 
 impl CleanupService {
@@ -117,7 +121,13 @@ impl CleanupService {
         let storage = CleanupStorage::open(app_data.join("cleanup")).map_err(map_storage_error)?;
         let writer = Arc::new(Mutex::new(()));
         let artifact_builds = BuildArtifactManager::new(storage.clone(), Arc::clone(&writer));
+        let vendor_jobs = crate::storage::vendor_uninstall::VendorJobManager::new(
+            storage.clone(),
+            Arc::clone(&writer),
+        );
+        // A corrupt vendor ledger disables only vendor operations, never legacy recovery/undo.
         let service = Self {
+            vendor_jobs,
             storage,
             file_system: WindowsFileSystem,
             recycle_bin,
@@ -127,6 +137,15 @@ impl CleanupService {
         };
         service.reconcile_interrupted()?;
         Ok(service)
+    }
+
+    pub fn vendor_jobs(
+        &self,
+    ) -> Result<
+        &crate::storage::vendor_uninstall::VendorJobManager,
+        crate::storage::vendor_uninstall::VendorJobError,
+    > {
+        self.vendor_jobs.as_ref().map_err(Clone::clone)
     }
 
     pub fn build_profiles(&self) -> Result<Vec<BuildProfile>, BuildArtifactError> {
@@ -371,6 +390,88 @@ impl CleanupService {
         })
     }
 
+    /// Backend-only bridge from retained storage IDs to the existing immutable plan/journal
+    /// flow. Recycle remains identity-required-recycle-unsupported (no pathname fallback).
+    pub fn create_storage_plan(
+        &self,
+        service: &crate::storage::scans::StorageService,
+        selection: &cleanup_core::storage::StorageSelection,
+        disposition: CleanupDisposition,
+    ) -> Result<CleanupPlanSummary, CleanupServiceError> {
+        use cleanup_core::storage::StorageModule;
+        if !matches!(
+            selection.module,
+            StorageModule::Cleaner
+                | StorageModule::Browser
+                | StorageModule::LargeFiles
+                | StorageModule::Duplicates
+                | StorageModule::EmptyFolders
+        ) {
+            return Err(CleanupServiceError::ValidationFailed);
+        }
+        let _writer = self
+            .writer
+            .lock()
+            .map_err(|_| CleanupServiceError::Conflict)?;
+        let evidence = service
+            .resolve_selection(selection)
+            .map_err(|_| CleanupServiceError::NotFound)?;
+        let root = evidence
+            .first()
+            .ok_or(CleanupServiceError::InvalidInput)?
+            .root()
+            .clone();
+        let mut items = selection
+            .candidate_ids
+            .iter()
+            .zip(evidence)
+            .map(|(id, evidence)| {
+                let proof = if selection.module == StorageModule::EmptyFolders {
+                    crate::storage::empty_folders::plan_proof(evidence)
+                } else if selection.module == StorageModule::Duplicates {
+                    crate::storage::duplicates::plan_proof(evidence)
+                } else if selection.module == StorageModule::LargeFiles {
+                    crate::storage::large_files::plan_proof(evidence)
+                } else {
+                    crate::storage::cleaner::plan_proof(evidence)
+                }
+                .map_err(|_| CleanupServiceError::ValidationFailed)?;
+                Ok(PlanItem {
+                    item_id: id.clone(),
+                    proof,
+                })
+            })
+            .collect::<Result<Vec<_>, CleanupServiceError>>()?;
+        if selection.module == StorageModule::EmptyFolders {
+            items.sort_by_key(|item| std::cmp::Reverse(item.proof.path.components().count()));
+        }
+        let selected_bytes = items
+            .iter()
+            .try_fold(0u64, |sum, item| sum.checked_add(item.proof.logical_bytes))
+            .ok_or(CleanupServiceError::InvalidInput)?;
+        let plan_id = random_id()?;
+        let plan = CleanupPlan::with_scope(
+            plan_id.clone(),
+            selection.snapshot_id.clone(),
+            now_seconds()?,
+            disposition,
+            CleanupPlanScope::Storage {
+                module: selection.module,
+                root,
+            },
+            items,
+        )
+        .map_err(map_storage_error)?;
+        self.validate_current_scope(&plan)?;
+        self.storage.create_plan(&plan).map_err(map_storage_error)?;
+        Ok(CleanupPlanSummary {
+            plan_id,
+            disposition,
+            selected_count: plan.items.len(),
+            selected_bytes,
+        })
+    }
+
     pub fn create_plan(
         &self,
         scan_id: &str,
@@ -384,6 +485,10 @@ impl CleanupService {
         {
             return Err(CleanupServiceError::InvalidInput);
         }
+        let _writer = self
+            .writer
+            .lock()
+            .map_err(|_| CleanupServiceError::Conflict)?;
         let scans = self
             .scans
             .lock()
@@ -412,14 +517,43 @@ impl CleanupService {
             })
             .ok_or(CleanupServiceError::InvalidInput)?;
         let plan_id = random_id()?;
-        let plan = CleanupPlan::new(
-            plan_id.clone(),
-            scan_id.to_owned(),
-            now_seconds()?,
-            disposition,
-            items,
-        )
+        let scope = match &items[0].proof.scope {
+            CandidateProofScope::Temporary => CleanupPlanScope::Temporary,
+            CandidateProofScope::Storage { evidence } => CleanupPlanScope::Storage {
+                module: evidence.module(),
+                root: evidence.root().clone(),
+            },
+            _ => return Err(CleanupServiceError::ValidationFailed),
+        };
+        if matches!(
+            scope,
+            CleanupPlanScope::Storage {
+                module: cleanup_core::storage::StorageModule::EmptyFolders,
+                ..
+            }
+        ) {
+            items.sort_by_key(|item| std::cmp::Reverse(item.proof.path.components().count()));
+        }
+        let plan = if matches!(scope, CleanupPlanScope::Temporary) {
+            CleanupPlan::new(
+                plan_id.clone(),
+                scan_id.to_owned(),
+                now_seconds()?,
+                disposition,
+                items,
+            )
+        } else {
+            CleanupPlan::with_scope(
+                plan_id.clone(),
+                scan_id.to_owned(),
+                now_seconds()?,
+                disposition,
+                scope,
+                items,
+            )
+        }
         .map_err(map_storage_error)?;
+        self.validate_current_scope(&plan)?;
         self.storage.create_plan(&plan).map_err(map_storage_error)?;
         Ok(CleanupPlanSummary {
             plan_id,
@@ -453,10 +587,49 @@ impl CleanupService {
         if (plan.disposition == CleanupDisposition::Permanent) != permanent_command {
             return Err(CleanupServiceError::InvalidInput);
         }
-        let current_rule = temporary_rule().map_err(|_| CleanupServiceError::ValidationFailed)?;
-        let expected_root = temporary_root().map_err(|_| CleanupServiceError::ValidationFailed)?;
-        if !plan_matches_current_scope(&self.file_system, &plan, &current_rule, &expected_root) {
-            return Err(CleanupServiceError::ValidationFailed);
+        if self
+            .storage
+            .executions()
+            .map_err(map_storage_error)?
+            .iter()
+            .any(|j| j.plan_id == plan.plan_id)
+        {
+            return Err(CleanupServiceError::Conflict);
+        }
+        self.validate_current_scope(&plan)?;
+        // Pin every duplicate group before its first mutation; never reopen members
+        // while DELETE handles are held. Keepers/ancestors survive journal completion.
+        let mut duplicate_members = std::collections::HashMap::new();
+        let mut duplicate_keepers = std::collections::HashMap::new();
+        for (index, item) in plan.items.iter().enumerate() {
+            if let CandidateProofScope::Storage { evidence } = &item.proof.scope
+                && let cleanup_core::storage::StorageEvidence::DuplicateMember {
+                    root,
+                    entry,
+                    keeper,
+                } = evidence.as_ref()
+            {
+                let key = keeper.group_id.clone();
+                if !duplicate_keepers.contains_key(&key) {
+                    let guard = self
+                        .file_system
+                        .guard_entry(&keeper.keeper_root, &keeper.keeper, true)
+                        .map_err(|_| CleanupServiceError::ValidationFailed)?;
+                    duplicate_keepers.insert(key.clone(), guard);
+                }
+                let member = self
+                    .file_system
+                    .guard_duplicate_member(root, entry)
+                    .map_err(|_| CleanupServiceError::ValidationFailed)?;
+                crate::storage::duplicates::verify(
+                    &duplicate_keepers[&key],
+                    &member,
+                    &keeper.full_sha256,
+                    &cleanup_core::CancellationToken::default(),
+                )
+                .map_err(|_| CleanupServiceError::ValidationFailed)?;
+                duplicate_members.insert(index, member);
+            }
         }
         let execution_id = random_id()?;
         let started_at = now_seconds()?;
@@ -517,6 +690,36 @@ impl CleanupService {
                     continue;
                 }
             };
+            if let CandidateProofScope::Storage { evidence } = &planned.proof.scope {
+                let guard = if matches!(
+                    evidence.as_ref(),
+                    cleanup_core::storage::StorageEvidence::DuplicateMember { .. }
+                ) {
+                    duplicate_members
+                        .remove(&index)
+                        .ok_or(CleanupServiceError::ValidationFailed)
+                } else {
+                    self.validate_storage_entry(evidence, &protection)
+                };
+                let result = guard
+                    .map_err(|_| "storage-revalidation-rejected")
+                    .and_then(|guard| match plan.disposition {
+                        CleanupDisposition::Permanent => {
+                            guard.remove().map_err(|_| "permanent-remove-failed")
+                        }
+                        _ => super::recycle::reject_identity_required(&guard)
+                            .map_err(|_| "identity-required-recycle-unsupported"),
+                    });
+                match result {
+                    Ok(()) => {
+                        journal.items[index].processed = true;
+                        journal.items[index].state = ItemState::Purged;
+                    }
+                    Err(reason) => fail_item(&mut journal.items[index], reason),
+                }
+                persist_accounting(&self.storage, &mut journal)?;
+                continue;
+            }
             let measured = match revalidate_candidate(
                 &self.file_system,
                 &planned.proof,
@@ -540,6 +743,9 @@ impl CleanupService {
         }
         journal.completed_at = Some(now_seconds()?);
         persist_accounting(&self.storage, &mut journal)?;
+        // Explicit lifetime: keeper and ancestor guards survive every selected
+        // member removal and the durable group/plan completion write.
+        drop(duplicate_keepers);
         Ok(summary(&journal))
     }
 
@@ -805,6 +1011,100 @@ impl CleanupService {
         Ok(())
     }
 
+    /// Shared creation/execution/recovery gate. Unimplemented evidence resolvers deny authority.
+    fn validate_current_scope(&self, plan: &CleanupPlan) -> Result<(), CleanupServiceError> {
+        plan.validate().map_err(map_storage_error)?;
+        if matches!(plan.scope, CleanupPlanScope::Storage { .. }) {
+            let protection =
+                current_protection().map_err(|_| CleanupServiceError::ValidationFailed)?;
+            let mut group_keepers = std::collections::HashMap::new();
+            for item in &plan.items {
+                if let CandidateProofScope::Storage { evidence } = &item.proof.scope
+                    && let cleanup_core::storage::StorageEvidence::DuplicateMember {
+                        keeper, ..
+                    } = evidence.as_ref()
+                    && (group_keepers
+                        .insert(&keeper.group_id, keeper)
+                        .is_some_and(|previous| previous != keeper)
+                        || plan
+                            .items
+                            .iter()
+                            .any(|i| i.proof.identity == keeper.keeper.identity))
+                {
+                    return Err(CleanupServiceError::ValidationFailed);
+                }
+                let CandidateProofScope::Storage { evidence } = &item.proof.scope else {
+                    return Err(CleanupServiceError::ValidationFailed);
+                };
+                self.validate_storage_entry(evidence, &protection)?;
+            }
+            return Ok(());
+        }
+        let rule = temporary_rule().map_err(|_| CleanupServiceError::ValidationFailed)?;
+        let root = temporary_root().map_err(|_| CleanupServiceError::ValidationFailed)?;
+        if plan_matches_current_scope(&self.file_system, plan, &rule, &root) {
+            Ok(())
+        } else {
+            Err(CleanupServiceError::ValidationFailed)
+        }
+    }
+
+    fn validate_storage_entry(
+        &self,
+        evidence: &cleanup_core::storage::StorageEvidence,
+        protection: &ProtectionPolicy,
+    ) -> Result<super::filesystem::IdentityGuard, CleanupServiceError> {
+        use cleanup_core::storage::StorageEvidence;
+        evidence
+            .validate()
+            .map_err(|_| CleanupServiceError::ValidationFailed)?;
+        let scope_valid = match evidence {
+            StorageEvidence::UserSelectedFile { root, entry } => {
+                crate::storage::protection::personal_path_allowed(&root.canonical_path)
+                    && crate::storage::protection::personal_path_allowed(&entry.canonical_path)
+            }
+            StorageEvidence::DuplicateMember {
+                root,
+                entry,
+                keeper,
+            } => {
+                crate::storage::protection::personal_path_allowed(&root.canonical_path)
+                    && crate::storage::protection::personal_path_allowed(&entry.canonical_path)
+                    && crate::storage::protection::personal_path_allowed(
+                        &keeper.keeper_root.canonical_path,
+                    )
+                    && crate::storage::protection::personal_path_allowed(
+                        &keeper.keeper.canonical_path,
+                    )
+                    && !protection.is_protected(&keeper.keeper.canonical_path)
+                    && !protection.is_repository_metadata(&keeper.keeper.canonical_path)
+                    && self
+                        .file_system
+                        .guard_entry(&keeper.keeper_root, &keeper.keeper, true)
+                        .is_ok()
+            }
+            StorageEvidence::EmptyFolder { .. } => {
+                crate::storage::empty_folders::validate_current(evidence)
+            }
+            StorageEvidence::CatalogTarget { .. } => {
+                crate::storage::cleaner::validate_current(evidence, protection).is_ok()
+            }
+            StorageEvidence::BrowserCache { .. } => {
+                crate::storage::browser::validate_current(evidence).is_ok()
+            }
+            _ => false,
+        };
+        if !scope_valid
+            || protection.is_protected(&evidence.entry().canonical_path)
+            || protection.is_repository_metadata(&evidence.entry().canonical_path)
+        {
+            return Err(CleanupServiceError::ValidationFailed);
+        }
+        self.file_system
+            .guard_entry(evidence.root(), evidence.entry(), false)
+            .map_err(|_| CleanupServiceError::ValidationFailed)
+    }
+
     fn reconcile_interrupted(&self) -> Result<(), CleanupServiceError> {
         for mut journal in self.storage.executions().map_err(map_storage_error)? {
             if journal.completed_at.is_some() {
@@ -814,6 +1114,25 @@ impl CleanupService {
                 .storage
                 .read_plan(&journal.plan_id)
                 .map_err(map_storage_error)?;
+            if matches!(plan.scope, CleanupPlanScope::Storage { .. }) {
+                let valid = self.validate_current_scope(&plan).is_ok();
+                for item in &mut journal.items {
+                    if matches!(item.state, ItemState::Pending | ItemState::Mutating) {
+                        item.state = ItemState::Unknown;
+                        item.failure = Some(
+                            if valid {
+                                "interrupted-outcome-unknown"
+                            } else {
+                                "interrupted-scope-stale"
+                            }
+                            .into(),
+                        );
+                    }
+                }
+                journal.completed_at = Some(now_seconds()?);
+                persist_accounting(&self.storage, &mut journal)?;
+                continue;
+            }
             self.storage
                 .reconcile(&plan, &mut journal)
                 .map_err(map_storage_error)?;
@@ -834,7 +1153,9 @@ pub(super) fn execute_registered_artifact_plan(
             root_id,
             profile_id,
         } => (root_id, profile_id),
-        CleanupPlanScope::Temporary => return Err(CleanupServiceError::ValidationFailed),
+        CleanupPlanScope::Temporary | CleanupPlanScope::Storage { .. } => {
+            return Err(CleanupServiceError::ValidationFailed);
+        }
     };
     let root = storage
         .project_roots()
@@ -1186,9 +1507,13 @@ fn plan_matches_current_scope(
     current_rule: &cleanup_core::CleanupRule,
     expected_root: &Path,
 ) -> bool {
+    if !matches!(plan.scope, CleanupPlanScope::Temporary) {
+        return false;
+    }
     let semantics = file_system.semantics();
     plan.items.iter().all(|item| {
-        item.proof.rule == *current_rule
+        matches!(item.proof.scope, CandidateProofScope::Temporary)
+            && item.proof.rule == *current_rule
             && semantics.equivalent(&item.proof.scan_root, expected_root)
             && semantics.equivalent(&item.proof.context_root, expected_root)
     })
@@ -1225,6 +1550,139 @@ mod tests {
         ArtifactRole, CandidateProofScope, GenerationState, Lifecycle, Markers, Provenance,
         RebuildCost, Risk, RuleRoot, ScannerKind, TargetType, snapshot_registered_path,
     };
+
+    fn storage_file_fixture() -> (PathBuf, PathBuf, CleanupStorage, CleanupPlan, PathBuf) {
+        use cleanup_core::storage::{
+            ObservedEntry, RootAuthorization, StorageEvidence, StorageModule,
+        };
+        let (fixture, app_data, storage, mut plan, _) = registered_execution_fixture(&["artifact"]);
+        let path = plan.items[0].proof.path.join("payload.bin");
+        let fs = WindowsFileSystem;
+        let meta = fs.metadata_no_follow(&path).unwrap();
+        let root_path = plan.items[0].proof.context_root.clone();
+        let root = RootAuthorization {
+            snapshot_id: plan.scan_id.clone(),
+            root_id: "d".repeat(32),
+            canonical_path: root_path.clone(),
+            identity: fs.metadata_no_follow(&root_path).unwrap().identity.unwrap(),
+        };
+        let entry = ObservedEntry {
+            canonical_path: path.clone(),
+            identity: meta.identity.unwrap(),
+            kind: meta.kind,
+            logical_bytes: meta.size,
+            allocated_bytes: Some(fs.allocated_size(&path, &meta).unwrap()),
+            modified_unix_nanos: meta
+                .modified
+                .unwrap()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+        };
+        plan.schema_version = 2;
+        plan.disposition = CleanupDisposition::Permanent;
+        plan.scope = CleanupPlanScope::Storage {
+            module: StorageModule::LargeFiles,
+            root: root.clone(),
+        };
+        let proof = &mut plan.items[0].proof;
+        proof.path = path.clone();
+        proof.scan_root = root_path;
+        proof.identity = entry.identity;
+        proof.kind = entry.kind;
+        proof.logical_bytes = entry.logical_bytes;
+        proof.allocated_bytes = entry.allocated_bytes.unwrap();
+        proof.scope = CandidateProofScope::Storage {
+            evidence: Box::new(StorageEvidence::UserSelectedFile { root, entry }),
+        };
+        storage.create_plan(&plan).unwrap();
+        (fixture, app_data, storage, plan, path)
+    }
+
+    #[test]
+    fn storage_mutating_journal_write_failure_preserves_source() {
+        let (fixture, app_data, storage, plan, path) = storage_file_fixture();
+        let before = fs::read(&path).unwrap();
+        let identity = WindowsFileSystem
+            .metadata_no_follow(&path)
+            .unwrap()
+            .identity;
+        let service = CleanupService::new(app_data.clone()).unwrap();
+        // Pending persists; the second write (Mutating) must fail before acquiring/deleting target.
+        service.storage.fail_write(2);
+        assert_eq!(
+            service.execute_permanent(&plan.plan_id).unwrap_err(),
+            CleanupServiceError::PersistenceFailed
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(
+            WindowsFileSystem
+                .metadata_no_follow(&path)
+                .unwrap()
+                .identity,
+            identity
+        );
+        let journals = storage.executions().unwrap();
+        assert_eq!(journals.len(), 1);
+        assert_eq!(journals[0].items[0].state, ItemState::Pending);
+        assert!(journals[0].completed_at.is_none());
+        drop(service);
+        let restarted = CleanupService::new(app_data).unwrap();
+        assert_eq!(
+            restarted.execute_permanent(&plan.plan_id).unwrap_err(),
+            CleanupServiceError::Conflict
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(
+            WindowsFileSystem
+                .metadata_no_follow(&path)
+                .unwrap()
+                .identity,
+            identity
+        );
+        drop(restarted);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn storage_permanent_replay_and_interrupted_recovery_never_repeat_mutation() {
+        let (fixture, app_data, storage, plan, path) = storage_file_fixture();
+        let service = CleanupService::new(app_data.clone()).unwrap();
+        service.validate_current_scope(&plan).unwrap();
+        let mut recycle = plan.clone();
+        recycle.plan_id = "e".repeat(32);
+        recycle.disposition = CleanupDisposition::RecycleBin;
+        storage.create_plan(&recycle).unwrap();
+        let rejected = service.execute(&recycle.plan_id).unwrap();
+        assert_eq!(rejected.items[0].state, ItemState::Failed);
+        assert!(path.exists());
+        assert_eq!(
+            service.execute(&plan.plan_id).unwrap_err(),
+            CleanupServiceError::InvalidInput
+        );
+        let result = service.execute_permanent(&plan.plan_id).unwrap();
+        assert_eq!(result.items[0].state, ItemState::Purged);
+        fs::write(&path, b"replacement survives").unwrap();
+        assert_eq!(
+            service.execute_permanent(&plan.plan_id).unwrap_err(),
+            CleanupServiceError::Conflict
+        );
+        let mut journal = storage.read_execution(&result.execution_id).unwrap();
+        journal.completed_at = None;
+        journal.items[0].state = ItemState::Mutating;
+        storage.write_execution(&journal).unwrap();
+        drop(service);
+        let restarted = CleanupService::new(app_data).unwrap();
+        let recovered = storage.read_execution(&result.execution_id).unwrap();
+        assert_eq!(recovered.items[0].state, ItemState::Unknown);
+        assert_eq!(
+            restarted.execute_permanent(&plan.plan_id).unwrap_err(),
+            CleanupServiceError::Conflict
+        );
+        assert_eq!(fs::read(path).unwrap(), b"replacement survives");
+        drop(restarted);
+        fs::remove_dir_all(fixture).unwrap();
+    }
 
     fn project_test_directory() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -1411,6 +1869,37 @@ mod tests {
                 && item.failure.as_deref() == Some("revalidation-rejected")
         }));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_vendor_journal_does_not_disable_legacy_history_or_undo() {
+        for corrupt in [
+            b"not JSON".as_slice(),
+            br#"{"schema_version":999,"journals":[]}"#.as_slice(),
+        ] {
+            let (root, app_data, storage, plan, artifacts) =
+                registered_execution_fixture(&["target/one"]);
+            execute_registered_artifact_plan(&storage, &WindowsFileSystem, &plan, 60).unwrap();
+            let before = serde_json::to_vec(&storage.executions().unwrap()).unwrap();
+            let vendor_path = app_data.join("cleanup/vendor-jobs.json");
+            fs::write(&vendor_path, corrupt).unwrap();
+            let service = CleanupService::new(app_data).unwrap();
+            assert!(matches!(
+                service.vendor_jobs(),
+                Err(crate::storage::vendor_uninstall::VendorJobError::Storage)
+            ));
+            assert_eq!(fs::read(&vendor_path).unwrap(), corrupt);
+            assert_eq!(
+                serde_json::to_vec(&storage.executions().unwrap()).unwrap(),
+                before
+            );
+            let execution = service.history().unwrap().pop().unwrap();
+            service.undo(&execution.execution_id).unwrap();
+            assert!(artifacts[0].1.exists());
+            assert_eq!(fs::read(&vendor_path).unwrap(), corrupt);
+            drop(service);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

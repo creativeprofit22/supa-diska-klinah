@@ -1,0 +1,5 @@
+{
+"id":"steam", "source":"rules/win32/steam.json", "targets":[
+{"id":"libraries","paths":["programFilesX86/Steam","programFiles/Steam","unsupported/D:/SteamLibrary","unsupported/E:/SteamLibrary","unsupported/F:/SteamLibrary"],"unsupported":"Pinned Steam library is a discovery hint, not cache-deletion authority. Native library binding and reference-aware game redistributable maintenance are not implemented; installed games and library roots are never deleted."},
+{"id":"redistributables","paths":["unsupported/steam-library/steamapps/common/*"],"suffixes":["_CommonRedist","CommonRedist","__installer","__Installer","_Redist","Redist","redist","DirectX","directx","vcredist","VCRedist","DotNetFX","dotnetfx","UE4PrereqSetup","xnafx","DXSETUP","Mono","WindowsNoEditor/Engine/Extras/Redist"],"unsupported":"Pinned redistributable matcher identifies installed-game repair prerequisites, not disposable caches; reference-aware installed-program maintenance is not implemented."}
+]}

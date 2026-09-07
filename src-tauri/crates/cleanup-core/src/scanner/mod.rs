@@ -57,6 +57,7 @@ pub(crate) struct TraversalContext<'a> {
     visited: AtomicUsize,
     candidates: AtomicUsize,
     diagnostics: Mutex<Vec<ScanDiagnostic>>,
+    diagnostic_count: AtomicUsize,
 }
 
 impl<'a> TraversalContext<'a> {
@@ -76,6 +77,7 @@ impl<'a> TraversalContext<'a> {
             visited: AtomicUsize::new(0),
             candidates: AtomicUsize::new(0),
             diagnostics: Mutex::new(Vec::new()),
+            diagnostic_count: AtomicUsize::new(0),
         }
     }
     pub fn check_cancelled(&self) -> Result<(), ScanError> {
@@ -91,59 +93,112 @@ impl<'a> TraversalContext<'a> {
         path: &Path,
         expected_identity: crate::FileIdentity,
     ) -> Result<Option<Vec<DirectoryEntry>>, ScanError> {
-        self.check_cancelled()?;
-        let mut enumerated_entries = Vec::new();
-        let mut cancelled = false;
-        let mut limit_reached = false;
-        let result = self.fs.read_dir(path, expected_identity, &mut |entry| {
-            if self.cancellation.is_cancelled() {
-                cancelled = true;
-                return ReadDirControl::Stop;
+        let mut enumerated = Vec::new();
+        let complete = self.enumerate_dir(rule_id, path, expected_identity, &mut |entry| {
+            if let Ok(entry) = entry {
+                enumerated.push(entry);
             }
-            if claim(&self.visited, self.limits.max_visited_entries) {
-                enumerated_entries.push(entry);
-                ReadDirControl::Continue
-            } else {
-                limit_reached = true;
-                ReadDirControl::Stop
-            }
-        });
-        if cancelled {
-            return Err(ScanError::Cancelled);
-        }
-        if limit_reached {
-            self.diagnostic(rule_id, path, DiagnosticReason::LimitReached);
+            ReadDirControl::Continue
+        })?;
+        if !complete {
             return Ok(None);
         }
-        if let Err(error) = result {
-            self.diagnostic(rule_id, path, diagnostic_for_error(error.kind));
-            return Ok(None);
-        }
-        let mut entries = Vec::with_capacity(enumerated_entries.len());
-        for entry in enumerated_entries {
+        // Legacy scanners validate after the enumeration handle closes. Preserve their
+        // existing operation/worker bounds rather than nesting metadata calls in read_dir.
+        let mut entries = Vec::with_capacity(enumerated.len());
+        for entry in enumerated {
             self.check_cancelled()?;
-            let current = match self.fs.metadata_no_follow(&entry.path) {
-                Ok(current) => current,
-                Err(error) => {
-                    self.diagnostic(rule_id, &entry.path, diagnostic_for_error(error.kind));
-                    continue;
-                }
-            };
-            if current.kind == EntryKind::LinkLike {
-                self.diagnostic(rule_id, &entry.path, DiagnosticReason::LinkLike);
-                continue;
+            if let Ok((entry, _)) = self.validate_entry(rule_id, entry) {
+                entries.push(entry);
             }
-            if current.kind != entry.kind || current.identity != entry.identity {
-                self.diagnostic(rule_id, &entry.path, DiagnosticReason::Changed);
-                continue;
-            }
-            if current.identity.is_none() {
-                self.diagnostic(rule_id, &entry.path, DiagnosticReason::MissingIdentity);
-                continue;
-            }
-            entries.push(entry);
         }
         Ok(Some(entries))
+    }
+
+    /// Every skipped entry is reported; storage must not mistake a failed child for absence.
+    pub fn visit_dir(
+        &self,
+        rule_id: &str,
+        path: &Path,
+        expected_identity: crate::FileIdentity,
+        visitor: &mut dyn FnMut(
+            Result<(DirectoryEntry, crate::EntryMetadata), ScanDiagnostic>,
+        ) -> ReadDirControl,
+    ) -> Result<bool, ScanError> {
+        self.enumerate_dir(rule_id, path, expected_identity, &mut |entry| {
+            visitor(entry.and_then(|entry| self.validate_entry(rule_id, entry)))
+        })
+    }
+    fn issue(&self, rule_id: &str, path: &Path, reason: DiagnosticReason) -> ScanDiagnostic {
+        self.diagnostic(rule_id, path, reason);
+        ScanDiagnostic {
+            rule_id: rule_id.into(),
+            path: path.to_string_lossy().into_owned(),
+            reason,
+        }
+    }
+    fn validate_entry(
+        &self,
+        rule_id: &str,
+        entry: DirectoryEntry,
+    ) -> Result<(DirectoryEntry, crate::EntryMetadata), ScanDiagnostic> {
+        let current = self
+            .fs
+            .metadata_no_follow(&entry.path)
+            .map_err(|error| self.issue(rule_id, &entry.path, diagnostic_for_error(error.kind)))?;
+        let reason = if current.kind == EntryKind::LinkLike {
+            Some(DiagnosticReason::LinkLike)
+        } else if current.kind != entry.kind || current.identity != entry.identity {
+            Some(DiagnosticReason::Changed)
+        } else if current.identity.is_none() {
+            Some(DiagnosticReason::MissingIdentity)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(self.issue(rule_id, &entry.path, reason));
+        }
+        Ok((entry, current))
+    }
+    fn enumerate_dir(
+        &self,
+        rule_id: &str,
+        path: &Path,
+        expected_identity: crate::FileIdentity,
+        visitor: &mut dyn FnMut(Result<DirectoryEntry, ScanDiagnostic>) -> ReadDirControl,
+    ) -> Result<bool, ScanError> {
+        self.check_cancelled()?;
+        let mut interrupted = false;
+        let result = self.fs.read_dir(path, expected_identity, &mut |entry| {
+            if self.cancellation.is_cancelled() {
+                interrupted = true;
+                return ReadDirControl::Stop;
+            }
+            if !claim(&self.visited, self.limits.max_visited_entries) {
+                visitor(Err(self.issue(
+                    rule_id,
+                    path,
+                    DiagnosticReason::LimitReached,
+                )));
+                interrupted = true;
+                return ReadDirControl::Stop;
+            }
+            let control = visitor(Ok(entry));
+            if control == ReadDirControl::Stop {
+                interrupted = true;
+            }
+            control
+        });
+        self.check_cancelled()?;
+        if let Err(error) = result {
+            visitor(Err(self.issue(
+                rule_id,
+                path,
+                diagnostic_for_error(error.kind),
+            )));
+            interrupted = true;
+        }
+        Ok(!interrupted)
     }
     pub fn push_candidate(&self, draft: CandidateDraft, output: &mut Vec<CandidateDraft>) {
         let count = self.candidates.fetch_add(1, Ordering::AcqRel) + 1;
@@ -153,7 +208,11 @@ impl<'a> TraversalContext<'a> {
             self.diagnostic("", Path::new(""), DiagnosticReason::LimitReached);
         }
     }
+    pub fn diagnostic_count(&self) -> usize {
+        self.diagnostic_count.load(Ordering::Acquire)
+    }
     pub fn diagnostic(&self, rule_id: &str, path: &Path, reason: DiagnosticReason) {
+        self.diagnostic_count.fetch_add(1, Ordering::AcqRel);
         let mut diagnostics = self
             .diagnostics
             .lock()

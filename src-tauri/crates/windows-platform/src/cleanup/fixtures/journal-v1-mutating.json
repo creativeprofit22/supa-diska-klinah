@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1, "executionId": "44444444444444444444444444444444",
+  "planId": "11111111111111111111111111111111", "startedAt": 1,
+  "completedAt": null, "disposition": "recycleBin", "purgeAfter": null,
+  "items": [{"itemId": "33333333333333333333333333333333", "state": "mutating",
+    "logicalBytes": 0, "processed": false, "occupiedBytes": 0, "reclaimedBytes": 0,
+    "quarantinePath": null, "recycleItem": null, "failure": null}],
+  "accounting": {"selectedBytes": 0, "processedBytes": 0, "failedBytes": 0,
+    "quarantinedBytes": 0, "purgedBytes": 0, "occupiedBytes": 0, "reclaimedBytes": 0}
+}

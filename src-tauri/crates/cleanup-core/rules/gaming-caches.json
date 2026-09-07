@@ -1,0 +1,21 @@
+{
+  "id":"gaming", "source":"rules/win32/gaming.json",
+  "targets":[
+    {"id":"steam","paths":["programFilesX86/Steam/logs","programFilesX86/Steam/dumps","programFilesX86/Steam/appcache/httpcache"]},
+    {"id":"epic","paths":["local/EpicGamesLauncher/Saved/webcache","local/EpicGamesLauncher/Saved/webcache_4430","local/EpicGamesLauncher/Saved/Logs","local/EpicGamesLauncher/Intermediate","programData/Epic/EpicGamesLauncher/VaultCache"]},
+    {"id":"ea","paths":["local/Electronic Arts/EA Desktop/Logs","local/Electronic Arts/EA Desktop/IGOCache","local/EADesktop/cache","local/Origin/cache"]},
+    {"id":"ubisoft","paths":["local/Ubisoft Game Launcher/cache","local/Ubisoft Game Launcher/logs"]},
+    {"id":"gog","paths":["local/GOG.com/Galaxy/webcache","programData/GOG.com/Galaxy/logs","programData/GOG.com/Galaxy/webcache"]},
+    {"id":"battlenet","paths":["local/Battle.net/Cache","local/Blizzard Entertainment/Battle.net/Logs","roaming/Battle.net/Logs"]},
+    {"id":"riot","paths":["local/Riot Games/Riot Client/Logs"]},
+    {"id":"xbox","paths":["local/Packages/Microsoft.GamingApp_8wekyb3d8bbwe/LocalCache","local/Packages/Microsoft.XboxApp_8wekyb3d8bbwe/LocalCache"]},
+    {"id":"rockstar","paths":["local/Rockstar Games/Launcher/cache","local/Rockstar Games/Launcher/logs"]},
+    {"id":"itch","paths":["roaming/itch/Cache/Cache_Data","roaming/itch/logs"]},
+    {"id":"minecraft","paths":["roaming/.minecraft/logs","roaming/.minecraft/crash-reports","roaming/.minecraft/webcache2"]},
+    {"id":"roblox","paths":["local/Roblox/logs"]},
+    {"id":"valorant","paths":["local/VALORANT/Saved/Logs","local/VALORANT/Saved/Crashes"]},
+    {"id":"fortnite","paths":["local/FortniteGame/Saved/Logs","local/FortniteGame/Saved/Crashes"]},
+    {"id":"amazon-games","paths":["local/Amazon Games/Data/Logs","local/Amazon Games/App/CEFCache"]},
+    {"id":"overwolf","paths":["local/Overwolf/Log","local/Overwolf/BrowserCache"]}
+  ]
+}

@@ -113,6 +113,9 @@ pub enum PreviewKind {
 pub enum CandidateProofScope {
     #[default]
     Temporary,
+    Storage {
+        evidence: Box<crate::storage::StorageEvidence>,
+    },
     RegisteredBuildArtifact {
         root_id: String,
         profile_id: String,
@@ -183,6 +186,11 @@ pub fn revalidate_candidate(
     protection: &ProtectionPolicy,
     now: SystemTime,
 ) -> Result<ValidatedCandidate, CandidateRejection> {
+    // Storage scopes require the dedicated platform validators/guards in step 3.
+    // Never let legacy rule matching coerce personal files into Temporary authority.
+    if matches!(candidate.scope, CandidateProofScope::Storage { .. }) {
+        return Err(CandidateRejection::InvalidProof);
+    }
     let semantics = fs.semantics();
     if !candidate.path.is_absolute()
         || !candidate.scan_root.is_absolute()

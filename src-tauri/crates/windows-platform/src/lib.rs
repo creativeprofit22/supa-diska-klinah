@@ -5,6 +5,7 @@ pub mod cleanup;
 pub mod privilege;
 pub mod security;
 mod startup;
+pub mod storage;
 
 pub use cleanup::WindowsFileSystem;
 pub use cleanup_core::FoundationStatus;

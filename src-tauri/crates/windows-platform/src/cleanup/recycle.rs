@@ -69,6 +69,12 @@ impl RecycleBin for WindowsRecycleBin {
     }
 }
 
+/// The path-derived shell operation cannot preserve target binding under a DELETE-denying
+/// guard. Do not release it, relax sharing, or fall back to permanent removal.
+pub fn reject_identity_required(_: &super::filesystem::IdentityGuard) -> Result<(), RecycleError> {
+    Err(RecycleError::Failed)
+}
+
 pub fn recycle_exact(
     recycle_bin: &dyn RecycleBin,
     path: &Path,

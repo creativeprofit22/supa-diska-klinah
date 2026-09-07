@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "planId": "11111111111111111111111111111111",
+  "scanId": "22222222222222222222222222222222",
+  "createdAt": 1,
+  "disposition": "quarantine",
+  "scope": {"kind": "buildArtifact", "root_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "profile_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  "items": [{
+    "itemId": "33333333333333333333333333333333",
+    "proof": {
+      "scope": {"kind": "registeredBuildArtifact", "root_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "profile_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "generation_id": "cccccccccccccccccccccccccccccccc"},
+      "path": "C:\\fixture\\source",
+      "scanRoot": "C:\\fixture", "contextRoot": "C:\\fixture",
+      "contextIdentity": {"volume": 1, "file": 2},
+      "rule": {
+        "id": "cache", "ruleVersion": 1, "lifecycle": "stable", "risk": "safe",
+        "provenance": {"source": "test", "verifiedAt": "2026-08-30"},
+        "defaultSelected": false, "scanner": "direct",
+        "roots": [{"binding": "temp", "suffix": ""}], "markers": {},
+        "targets": ["source"], "targetType": "directory", "rootDepth": 1
+      },
+      "identity": {"volume": 1, "file": 1}, "kind": "directory",
+      "logicalBytes": 0, "allocatedBytes": 0,
+      "scannedAt": {"secs_since_epoch": 0, "nanos_since_epoch": 0}
+    }
+  }]
+}

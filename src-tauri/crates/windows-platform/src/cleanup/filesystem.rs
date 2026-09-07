@@ -15,12 +15,14 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{CloseHandle, ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE},
     Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_ATTRIBUTE_DIRECTORY,
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_ID_BOTH_DIR_INFO, FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, FILE_STANDARD_INFO, FileIdBothDirectoryInfo,
+        BY_HANDLE_FILE_INFORMATION, CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_ID_BOTH_DIR_INFO,
+        FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FILE_STANDARD_INFO, FileDispositionInfo, FileIdBothDirectoryInfo,
         FileIdBothDirectoryRestartInfo, FileStandardInfo, GetDiskFreeSpaceExW,
         GetFileInformationByHandle, GetFileInformationByHandleEx, OPEN_EXISTING,
+        SetFileInformationByHandle,
     },
 };
 
@@ -34,6 +36,18 @@ pub struct CopyReport {
 }
 
 impl FileSystem for WindowsFileSystem {
+    fn hidden_or_system(&self, path: &Path, metadata: &EntryMetadata) -> Option<bool> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM,
+        };
+        let info = OwnedHandle::open(path, 0).ok()?.information().ok()?;
+        let current = metadata_from_information(info).ok()?;
+        if current.identity != metadata.identity || current.kind != metadata.kind {
+            return None;
+        }
+        Some(info.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0)
+    }
+
     fn semantics(&self) -> PathSemantics {
         PathSemantics::CaseInsensitive
     }
@@ -165,6 +179,126 @@ fn kind_from_attributes(attributes: u32) -> EntryKind {
         EntryKind::Directory
     } else {
         EntryKind::File
+    }
+}
+
+/// Owns the target and every ancestor until disposition completes. Never exposes a raw handle.
+pub struct IdentityGuard {
+    target: OwnedHandle,
+    _ancestors: Vec<OwnedHandle>,
+}
+
+impl IdentityGuard {
+    /// Read the already pinned target, never reopen its pathname or drop guards.
+    pub fn read_at(&self, buffer: &mut [u8], offset: u64) -> Result<usize, FsError> {
+        use std::os::windows::{fs::FileExt, io::FromRawHandle};
+        // SAFETY: this borrowed File view never closes the owned live target.
+        let file = mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_handle(self.target.0) });
+        file.seek_read(buffer, offset).map_err(FsError::from)
+    }
+    /// Basic disposition is nonrecursive: a directory with a late child fails closed.
+    pub fn remove(self) -> Result<(), FsError> {
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // SAFETY: live DELETE handle, typed input and exact native structure size.
+        if unsafe {
+            SetFileInformationByHandle(
+                self.target.0,
+                FileDispositionInfo,
+                (&raw const disposition).cast(),
+                mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err(FsError::from(io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+}
+
+impl WindowsFileSystem {
+    pub fn guard_entry(
+        &self,
+        root: &cleanup_core::storage::RootAuthorization,
+        entry: &cleanup_core::storage::ObservedEntry,
+        keeper: bool,
+    ) -> Result<IdentityGuard, FsError> {
+        self.guard_entry_access(root, entry, keeper, keeper)
+    }
+
+    /// Duplicate members need read access on the same DELETE-bound handle.
+    pub fn guard_duplicate_member(
+        &self,
+        root: &cleanup_core::storage::RootAuthorization,
+        entry: &cleanup_core::storage::ObservedEntry,
+    ) -> Result<IdentityGuard, FsError> {
+        if entry.kind != EntryKind::File {
+            return Err(FsError::new(
+                FsErrorKind::Changed,
+                "duplicate must be a file",
+            ));
+        }
+        self.guard_entry_access(root, entry, false, true)
+    }
+
+    fn guard_entry_access(
+        &self,
+        root: &cleanup_core::storage::RootAuthorization,
+        entry: &cleanup_core::storage::ObservedEntry,
+        keeper: bool,
+        read: bool,
+    ) -> Result<IdentityGuard, FsError> {
+        let changed = || FsError::new(FsErrorKind::Changed, "identity guard rejected");
+        root.validate().map_err(|_| changed())?;
+        entry.validate_under(root).map_err(|_| changed())?;
+        if keeper && entry.kind != EntryKind::File {
+            return Err(changed());
+        }
+        let mut paths: Vec<_> = entry.canonical_path.ancestors().skip(1).collect();
+        if paths.len() > 128 {
+            return Err(changed());
+        }
+        paths.reverse();
+        let mut ancestors = Vec::with_capacity(paths.len());
+        let mut root_seen = false;
+        for path in paths {
+            let handle = OwnedHandle::open_with_share(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE)?;
+            let info = metadata_from_information(handle.information()?)?;
+            if info.kind != EntryKind::Directory || info.identity.is_none() {
+                return Err(changed());
+            }
+            if self.semantics().equivalent(path, &root.canonical_path) {
+                if info.identity != Some(root.identity) {
+                    return Err(changed());
+                }
+                root_seen = true;
+            }
+            ancestors.push(handle);
+        }
+        if !root_seen {
+            return Err(changed());
+        }
+        let target = OwnedHandle::open_with_share(
+            &entry.canonical_path,
+            (if keeper { 0 } else { DELETE }) | if read { FILE_GENERIC_READ } else { 0 },
+            FILE_SHARE_READ,
+        )?;
+        let info = metadata_from_information(target.information()?)?;
+        if info.kind != entry.kind
+            || info.identity != Some(entry.identity)
+            || (entry.kind == EntryKind::File
+                && (info.size != entry.logical_bytes
+                    || info
+                        .modified
+                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                        .and_then(|d| u64::try_from(d.as_nanos()).ok())
+                        != Some(entry.modified_unix_nanos)))
+        {
+            return Err(changed());
+        }
+        Ok(IdentityGuard {
+            target,
+            _ancestors: ancestors,
+        })
     }
 }
 

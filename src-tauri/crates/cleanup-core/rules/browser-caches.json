@@ -1,0 +1,35 @@
+{
+  "revision": "db09e051d0615121e659db187e3799438acbc9e6",
+  "source": "rules/win32/browsers.json",
+  "minimumAgeSeconds": 3600,
+  "risk": "Cache content is downloaded or rebuilt; first use may be slower. Permanent deletion has no app-managed recovery.",
+  "lifecycle": "candidate",
+  "riskClass": "highImpact",
+  "unsupported": ["Safari has no Windows target in the pinned catalog.", "Whole profiles, browser databases and personal data are never cleanup targets.", "Portable or renamed executables cannot be reliably identified by process basename; nonstandard installations are unsupported.", "Recycle: identity-required-recycle-unsupported; no raw-path fallback."],
+  "serviceWorkerDisclosure": "Service-worker cache cleanup may remove offline website content. Explicit opt-in is required.",
+  "profile": ["Cache/Cache_Data", "Code Cache", "GPUCache", "Service Worker/CacheStorage", "Shared Dictionary/cache", "DawnWebGPUCache", "DawnGraphiteCache"],
+  "shared": ["component_crx_cache", "extensions_crx_cache", "GrShaderCache", "ShaderCache", "GraphiteDawnCache", "GPUPersistentCache", "PnaclTranslationCache"],
+  "chromium": [
+    ["chrome", "local", "Google/Chrome/User Data"],
+    ["edge", "local", "Microsoft/Edge/User Data"],
+    ["brave", "local", "BraveSoftware/Brave-Browser/User Data"],
+    ["opera", "roaming", "Opera Software/Opera Stable"],
+    ["operaGX", "roaming", "Opera Software/Opera GX Stable"],
+    ["vivaldi", "local", "Vivaldi/User Data"],
+    ["arc", "local", "Arc/User Data"],
+    ["chromium", "local", "Chromium/User Data"],
+    ["thorium", "local", "Thorium/User Data"],
+    ["supermium", "local", "Supermium/User Data"],
+    ["helium", "local", "imput/Helium/User Data"],
+    ["cromite", "local", "Cromite/User Data"],
+    ["catsxp", "local", "ArcSoft/CatsXP/User Data"]
+  ],
+  "firefox": [
+    ["firefox", "Mozilla/Firefox/Profiles", "Mozilla/Firefox/Profiles"],
+    ["librewolf", "LibreWolf/Profiles", "LibreWolf/Profiles"],
+    ["waterfox", "Waterfox/Profiles", "Waterfox/Profiles"],
+    ["floorp", "Floorp/Profiles", "Floorp/Profiles"],
+    ["zen", "Zen/Profiles", "Zen/Profiles"]
+  ],
+  "exclusions": [".git", ".hg", ".svn", "File System", "Sync Data", "Cookies", "Login Data", "Bookmarks", "History", "Sessions", "Session Storage", "Local Storage", "IndexedDB", "Extensions", "Network", "WebStorage", "blob_storage", "databases", "places.sqlite", "cookies.sqlite", "key4.db", "logins.json", "sessionstore.jsonlz4"]
+}

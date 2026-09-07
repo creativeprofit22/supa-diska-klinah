@@ -4,6 +4,7 @@ mod filesystem;
 mod protection;
 mod rules;
 mod scanner;
+pub mod storage;
 
 pub use build_artifacts::*;
 pub use engine::*;

@@ -7,7 +7,7 @@ use std::{
 #[derive(
     Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
 )]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileIdentity {
     pub volume: u64,
     pub file: u64,
@@ -86,7 +86,10 @@ pub enum PathSemantics {
 
 impl PathSemantics {
     pub fn key(self, path: &Path) -> String {
-        let mut value = path.to_string_lossy().replace('\\', "/");
+        let normalized = path.to_string_lossy().replace('\\', "/");
+        let mut value = local_verbatim_disk(&normalized)
+            .unwrap_or(&normalized)
+            .to_owned();
         while value.len() > 1 && value.ends_with('/') && !value.ends_with(":/") {
             value.pop();
         }
@@ -104,7 +107,7 @@ impl PathSemantics {
         candidate == root
             || candidate
                 .strip_prefix(&root)
-                .is_some_and(|tail| tail.starts_with('/'))
+                .is_some_and(|tail| root.ends_with('/') || tail.starts_with('/'))
     }
 }
 
@@ -114,7 +117,40 @@ pub enum ReadDirControl {
     Stop,
 }
 
+// Accept only the verbatim *disk* form returned by Windows canonicalize; never
+// strip arbitrary device, GLOBALROOT, volume GUID or verbatim UNC namespaces.
+fn local_verbatim_disk(normalized: &str) -> Option<&str> {
+    let disk = normalized.strip_prefix("//?/")?;
+    let bytes = disk.as_bytes();
+    (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/')
+        .then_some(disk)
+}
+
+/// Storage authorization accepts local absolute paths only. Canonicalization and
+/// no-follow identity checks are still required; this is a syntax gate, not authority.
+pub fn is_local_storage_path(path: &Path) -> bool {
+    let Some(text) = path.to_str() else {
+        return false;
+    };
+    let normalized = text.replace('\\', "/");
+    let normalized = local_verbatim_disk(&normalized).unwrap_or(&normalized);
+    path.is_absolute()
+        && text.len() <= 4096
+        && !text.chars().any(char::is_control)
+        && !normalized.starts_with("//")
+        && !normalized
+            .split('/')
+            .any(|part| part == "." || part == "..")
+        && !normalized.char_indices().any(|(index, ch)| {
+            ch == ':' && !(index == 1 && normalized.as_bytes()[0].is_ascii_alphabetic())
+        })
+}
+
 pub trait FileSystem: Send + Sync {
+    /// Identity-bound native visibility attributes. Unknown must block empty-folder proofs.
+    fn hidden_or_system(&self, _path: &Path, _metadata: &EntryMetadata) -> Option<bool> {
+        None
+    }
     fn semantics(&self) -> PathSemantics;
     fn metadata_no_follow(&self, path: &Path) -> Result<EntryMetadata, FsError>;
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, FsError>;

@@ -1,0 +1,48 @@
+[
+  {
+    "module": "catalogTarget",
+    "root": {"snapshotId":"22222222222222222222222222222222","rootId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","canonicalPath":"C:/fixture","identity":{"volume":1,"file":2}},
+    "entry": {"canonicalPath":"C:/fixture/cache","identity":{"volume":1,"file":3},"kind":"directory","logicalBytes":10,"allocatedBytes":16,"modifiedUnixNanos":1000000000},
+    "catalog": {"catalogId":"cleaner","revision":"v1","targetId":"cache","ruleVersion":1,"minimumAgeSeconds":1,"newestDescendantUnixNanos":1000000000,"observedAtUnixNanos":2000000000}
+  },
+  {
+    "module": "userSelectedFile",
+    "root": {"snapshotId":"22222222222222222222222222222222","rootId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","canonicalPath":"C:/fixture","identity":{"volume":1,"file":2}},
+    "entry": {"canonicalPath":"C:/fixture/file","identity":{"volume":1,"file":3},"kind":"file","logicalBytes":10,"allocatedBytes":16,"modifiedUnixNanos":1000000000}
+  },
+  {
+    "module": "duplicateMember",
+    "root": {"snapshotId":"22222222222222222222222222222222","rootId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","canonicalPath":"C:/fixture","identity":{"volume":1,"file":2}},
+    "entry": {"canonicalPath":"C:/fixture/file","identity":{"volume":1,"file":3},"kind":"file","logicalBytes":10,"allocatedBytes":16,"modifiedUnixNanos":1000000000},
+    "keeper": {
+      "groupId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "keeperRoot":{"snapshotId":"22222222222222222222222222222222","rootId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","canonicalPath":"C:/fixture","identity":{"volume":1,"file":2}},
+      "keeper":{"canonicalPath":"C:/fixture/keeper","identity":{"volume":1,"file":4},"kind":"file","logicalBytes":10,"allocatedBytes":16,"modifiedUnixNanos":1000000000},
+      "fullSha256":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32],
+      "independentCopies":2
+    }
+  },
+  {
+    "module": "emptyFolder",
+    "root": {"snapshotId":"22222222222222222222222222222222","rootId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","canonicalPath":"C:/fixture","identity":{"volume":1,"file":2}},
+    "entry": {"canonicalPath":"C:/fixture/empty","identity":{"volume":1,"file":3},"kind":"directory","logicalBytes":0,"allocatedBytes":0,"modifiedUnixNanos":1000000000},
+    "completeSubtree":true,"descendantDirectories":0
+  },
+  {
+    "module": "browserCache",
+    "root": {"snapshotId":"22222222222222222222222222222222","rootId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","canonicalPath":"C:/fixture","identity":{"volume":1,"file":2}},
+    "entry": {"canonicalPath":"C:/fixture/profile/cache","identity":{"volume":1,"file":3},"kind":"directory","logicalBytes":10,"allocatedBytes":16,"modifiedUnixNanos":1000000000},
+    "catalog": {"catalogId":"browser","revision":"v1","targetId":"cache","ruleVersion":1,"minimumAgeSeconds":1,"newestDescendantUnixNanos":1000000000,"observedAtUnixNanos":2000000000},
+    "browserId":"chromium","profileId":"cccccccccccccccccccccccccccccccc",
+    "profile":{"canonicalPath":"C:/fixture/profile","identity":{"volume":1,"file":4},"kind":"directory","logicalBytes":10,"allocatedBytes":16,"modifiedUnixNanos":1000000000},
+    "activityCheckedAtUnixNanos":2000000000,"browserInactive":true,"serviceWorker":false,"serviceWorkerOptIn":false
+  },
+  {
+    "module": "confirmedApplicationLeftover",
+    "root": {"snapshotId":"22222222222222222222222222222222","rootId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","canonicalPath":"C:/fixture","identity":{"volume":1,"file":2}},
+    "entry": {"canonicalPath":"C:/fixture/application/cache","identity":{"volume":1,"file":3},"kind":"directory","logicalBytes":10,"allocatedBytes":16,"modifiedUnixNanos":1000000000},
+    "programId":"dddddddddddddddddddddddddddddddd","registryKey":"Software/Test/Uninstall/App","registryView":"currentUser64",
+    "uninstallConfirmationId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","uninstallCompletedAtUnixNanos":2000000000,
+    "exactApplicationRoot":{"canonicalPath":"C:/fixture/application","identity":{"volume":1,"file":4},"kind":"directory","logicalBytes":10,"allocatedBytes":16,"modifiedUnixNanos":1000000000}
+  }
+]

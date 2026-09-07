@@ -19,6 +19,13 @@ const helperManifest = read(
 const commandSource = read("src-tauri/src/commands/security.rs");
 const brokerSource = read("src-tauri/crates/windows-platform/src/security/broker.rs");
 const helperSource = read("src-tauri/crates/windows-platform/src/security/helper.rs");
+const vendorSource = read("src-tauri/crates/windows-platform/src/storage/vendor_uninstall.rs");
+if (/\b(?:TerminateProcess|TerminateJobObject|GenerateConsoleCtrlEvent)\b|\.kill\s*\(|SW_HIDE|wide\("runas"\)/.test(vendorSource) ||
+    !/CoInitializeEx/.test(vendorSource) || !/COINIT_APARTMENTTHREADED/.test(vendorSource) ||
+    !/SEE_MASK_NOASYNC/.test(vendorSource) || !/SEE_MASK_NOCLOSEPROCESS/.test(vendorSource) ||
+    !/SW_SHOWNORMAL/.test(vendorSource) || !/hProcess\.is_null\(\)/.test(vendorSource)) {
+  fail("vendor owner must use visible STA shell launch, owned handles and never terminate a vendor");
+}
 const protocolSource = read("src-tauri/crates/windows-platform/src/security/protocol.rs");
 const buildArtifactCommands = read("src-tauri/src/commands/build_artifacts.rs");
 const buildArtifactCoordinator = read(

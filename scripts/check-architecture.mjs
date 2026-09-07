@@ -97,6 +97,8 @@ const approvedProcessOwner = resolve(
   root,
   "src-tauri/crates/windows-platform/src/cleanup/build_artifacts.rs",
 );
+const approvedVendorOwner = resolve(root, "src-tauri/crates/windows-platform/src/storage/vendor_uninstall.rs");
+const approvedBrokerOwner = resolve(root, "src-tauri/crates/windows-platform/src/security/broker.rs");
 // Only the #[cfg(test)] cancellation tests copy/compile this standalone fixture.
 // Keep this exception exact: other tests, fixtures, and production files stay checked.
 const approvedProcessFixture = resolve(
@@ -114,11 +116,17 @@ for (const directory of rustRoots) {
   for (const file of rustFiles(directory)) {
     const source = readFileSync(file, "utf8");
     if (
-      /std::process::Command|Command::new/.test(source) &&
+      /\bprocess\s*::\s*(?:Command|\*|\{[^}]*\bCommand\b)|\bCommand\s*::\s*new|\buse\s+std\s*::\s*process\s*(?:;|as)/.test(source) &&
+      resolve(file) !== approvedVendorOwner &&
       resolve(file) !== approvedProcessOwner &&
       resolve(file) !== approvedProcessFixture
     ) {
       fail(`${relative(root, file)} contains forbidden runtime process execution`);
+    }
+    // Detect imported/aliased APIs too, not just call expressions. Fixture paths get no native exception.
+    if (/\b(?:CreateProcess(?:AsUser|WithLogon|WithToken)?[AW]?|ShellExecute(?:Ex)?[AW]?|WinExec|NtCreateUserProcess|RtlCreateUserProcess)\b/.test(source) &&
+        ![approvedVendorOwner, approvedBrokerOwner, approvedProcessOwner].includes(resolve(file))) {
+      fail(`${relative(root, file)} contains forbidden native process execution`);
     }
   }
 }
@@ -151,6 +159,7 @@ const approvedFeatureBridges = new Set([
   "src/features/build-artifacts/ArtifactBudgetSettings.tsx->src/features/cleanup/api/previewCleanup.ts",
   "src/features/build-artifacts/BuildArtifactCoordinator.tsx->src/features/cleanup/api/previewCleanup.ts",
   "src/features/build-artifacts/BuildArtifactCoordinator.tsx->src/features/cleanup/format.ts",
+  "src/features/drives/DriveInventoryPage.tsx->src/features/cleanup/format.ts",
   // Reuse the cleanup API's project-root registry, like the coordinator/settings consumers above.
   // Only this hook-to-API edge is approved, not the surrounding features.
   "src/features/build-artifacts/useProjectRoots.ts->src/features/cleanup/api/previewCleanup.ts",

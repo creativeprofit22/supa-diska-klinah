@@ -2,7 +2,7 @@
 
 ## Kudu
 
-The Kudu v2.4.0 IPC inventory informed `docs/parity.md`. No Kudu runtime implementation is included. Reference source: <https://github.com/AdventDevInc/kudu/tree/db09e051d0615121e659db187e3799438acbc9e6>.
+The Kudu v2.4.0 IPC inventory informed `docs/parity.md`. Windows filesystem rule catalogs under `src-tauri/crates/cleanup-core/rules/` adapt Kudu's declarative targets and browser layouts. Kudu's Electron/TypeScript runtime is not included. Reference source: <https://github.com/AdventDevInc/kudu/tree/db09e051d0615121e659db187e3799438acbc9e6>. The MIT notice below applies to those adapted portions.
 
 MIT License
 
