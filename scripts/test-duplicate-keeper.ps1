@@ -1,4 +1,8 @@
 $ErrorActionPreference = 'Stop'
+# Compile before starting the bounded race handshake; cold linking is not a
+# keeper-protection timeout. A failed build must never launch the fixture.
+& cargo test --manifest-path src-tauri/Cargo.toml -p windows-platform --test duplicate_keeper_process --locked --no-run
+if ($LASTEXITCODE -ne 0) { throw "Keeper fixture build failed: $LASTEXITCODE" }
 $root = Join-Path ([IO.Path]::GetTempPath()) ('duplicate-keeper-fixture-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($root) | Out-Null
 [IO.File]::WriteAllText((Join-Path $root 'fixture-marker'), 'disposable-duplicate-test-v1')
@@ -19,7 +23,7 @@ function Assert-Denied($action, $label) {
 }
 try {
     # Test-only external orchestration; no application/runtime process exception.
-    $process = Start-Process cargo -ArgumentList @('test', '--manifest-path', 'src-tauri/Cargo.toml', '-p', 'windows-platform', '--test', 'duplicate_keeper_process', '--', '--ignored', '--exact', 'keeper_is_pinned_through_entire_group', '--nocapture') -NoNewWindow -PassThru
+    $process = Start-Process cargo -ArgumentList @('test', '--manifest-path', 'src-tauri/Cargo.toml', '-p', 'windows-platform', '--test', 'duplicate_keeper_process', '--locked', '--', '--ignored', '--exact', 'keeper_is_pinned_through_entire_group', '--nocapture') -NoNewWindow -PassThru
     $null = $process.Handle # Retain native process handle for ExitCode in Windows PowerShell.
     $group = Join-Path $root 'group'
     $keeper = Join-Path $group 'keeper'

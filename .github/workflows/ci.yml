@@ -80,6 +80,19 @@ jobs:
         run: cargo test --workspace --locked
         working-directory: src-tauri
 
+      - name: Test duplicate keeper external-process race
+        timeout-minutes: 5
+        shell: pwsh
+        env:
+          RUSTUP_TOOLCHAIN: "1.90.0"
+        # Reuse the workspace test target; the driver keeps its locked precompile
+        # outside the bounded race handshake. No privileged smoke helper is used.
+        run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-duplicate-keeper.ps1
+          $driverExit = $LASTEXITCODE
+          Write-Host "Duplicate keeper driver exit code: $driverExit"
+          exit $driverExit
+
   native-smoke:
     name: Native smoke (${{ matrix.architecture }})
     strategy:
