@@ -350,10 +350,7 @@ impl VendorJobManager {
             .map_err(|_| VendorJobError::Conflict)?;
         if cancel.load(Ordering::Acquire)
             || self.shared.shutdown.load(Ordering::Acquire)
-            || !state
-                .active
-                .as_ref()
-                .is_some_and(|a| a.id == reservation_id)
+            || state.active.as_ref().is_none_or(|a| a.id != reservation_id)
         {
             return Err(VendorJobError::Conflict);
         }
