@@ -201,33 +201,27 @@ impl WalkState<'_, '_> {
                 if let Some(reason) = reason {
                     context.diagnostic("storage", &entry.path, DiagnosticReason::Changed);
                     self.blocked(&entry.path, reason, &mut completeness);
-                } else {
-                    if (self.visitor)(WalkEvent::Entry {
-                        path: &entry.path,
-                        metadata: &metadata,
-                        depth: depth + 1,
-                    }) == WalkControl::Stop
-                    {
+                } else if (self.visitor)(WalkEvent::Entry {
+                    path: &entry.path,
+                    metadata: &metadata,
+                    depth: depth + 1,
+                }) == WalkControl::Stop
+                {
+                    self.stopped = true;
+                    completeness.mark(PartialReason::RecordLimit);
+                } else if metadata.kind == EntryKind::Directory {
+                    let identity = metadata
+                        .identity
+                        .expect("TraversalContext requires identity");
+                    if self.directories.len() >= self.limits.retained_records {
                         self.stopped = true;
-                        completeness.mark(PartialReason::RecordLimit);
-                    } else if metadata.kind == EntryKind::Directory {
-                        let identity = metadata
-                            .identity
-                            .expect("TraversalContext requires identity");
-                        if self.directories.len() >= self.limits.retained_records {
-                            self.stopped = true;
-                            self.blocked(
-                                &entry.path,
-                                PartialReason::RecordLimit,
-                                &mut completeness,
-                            );
-                        } else if !self.directories.insert(identity) {
-                            self.blocked(&entry.path, PartialReason::Changed, &mut completeness);
-                        } else {
-                            let child = self.directory(&entry.path, identity, depth + 1);
-                            for reason in child.reasons {
-                                completeness.mark(reason);
-                            }
+                        self.blocked(&entry.path, PartialReason::RecordLimit, &mut completeness);
+                    } else if !self.directories.insert(identity) {
+                        self.blocked(&entry.path, PartialReason::Changed, &mut completeness);
+                    } else {
+                        let child = self.directory(&entry.path, identity, depth + 1);
+                        for reason in child.reasons {
+                            completeness.mark(reason);
                         }
                     }
                 }

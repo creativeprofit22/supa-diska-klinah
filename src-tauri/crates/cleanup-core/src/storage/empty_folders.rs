@@ -8,9 +8,9 @@ use std::path::Path;
 
 /// Unknown attributes are not permission; apply this through the shared walker's exclusion gate.
 pub fn blocks_visibility(fs: &dyn FileSystem, path: &Path) -> bool {
-    !fs.metadata_no_follow(path)
+    fs.metadata_no_follow(path)
         .ok()
-        .is_some_and(|metadata| fs.hidden_or_system(path, &metadata) == Some(false))
+        .is_none_or(|metadata| fs.hidden_or_system(path, &metadata) != Some(false))
 }
 
 struct Directory {
