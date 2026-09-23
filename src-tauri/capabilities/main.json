@@ -53,7 +53,27 @@
     "allow-release-storage-scan",
     "allow-create-storage-plan",
     "allow-foundation-status",
-    "allow-create-system-restore-point"
+    "allow-create-system-restore-point",
+    "allow-preview-system-change",
+    "allow-create-system-change-plan",
+    "allow-confirm-system-change-plan",
+    "allow-execute-system-change-plan",
+    "allow-system-change-journal",
+    "allow-create-system-rollback-plan",
+    "allow-list-startup-items",
+    "allow-list-services",
+    "allow-list-driver-packages",
+    "allow-get-firewall-status",
+    "allow-get-hosts-report",
+    "allow-get-privacy-report",
+    "allow-get-power-status",
+    "allow-list-restore-points",
+    "allow-get-restore-protection",
+    "allow-get-windows-update-status",
+    "allow-detect-windows-updates",
+    "allow-list-scan-schedules",
+    "allow-list-scheduled-scan-summaries",
+    "allow-get-optimizer-proposals"
   ],
   "platforms": ["windows"]
 }

@@ -2,11 +2,25 @@
 compile_error!("windows-platform supports Windows targets only");
 
 pub mod cleanup;
+pub mod drivers;
+pub mod firewall;
 pub mod history;
+pub mod hosts;
+pub mod optimizer;
+pub mod os_info;
+pub mod power;
+pub mod privacy;
 pub mod privilege;
+pub mod restore;
+pub mod scheduler;
 pub mod security;
+pub mod services;
 mod startup;
+pub mod startup_items;
 pub mod storage;
+pub mod system_change;
+pub mod updates;
+pub mod win_registry;
 
 pub use cleanup::WindowsFileSystem;
 pub use cleanup_core::FoundationStatus;

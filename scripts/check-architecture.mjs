@@ -99,11 +99,23 @@ const approvedProcessOwner = resolve(
 );
 const approvedVendorOwner = resolve(root, "src-tauri/crates/windows-platform/src/storage/vendor_uninstall.rs");
 const approvedBrokerOwner = resolve(root, "src-tauri/crates/windows-platform/src/security/broker.rs");
+// ADR 0002: the only system-management process launch is the helper-side
+// `<System32>\powercfg.exe /hibernate on|off` with fixed argv.
+const approvedPowercfgOwner = resolve(root, "src-tauri/crates/windows-platform/src/power/elevated.rs");
 // Only the #[cfg(test)] cancellation tests copy/compile this standalone fixture.
 // Keep this exception exact: other tests, fixtures, and production files stay checked.
 const approvedProcessFixture = resolve(
   root,
   "src-tauri/crates/windows-platform/tests/fixtures/native-process-tree.rs",
+);
+const systemModuleDirs = [
+  "startup_items", "services", "drivers", "firewall", "hosts", "privacy", "power", "restore",
+  "updates", "scheduler", "system_change",
+].map((name) => resolve(root, "src-tauri/crates/windows-platform/src", name));
+const systemModuleFiles = new Set(
+  ["optimizer.rs", "win_registry.rs", "os_info.rs", "security/system_changes.rs"].map((name) =>
+    resolve(root, "src-tauri/crates/windows-platform/src", name),
+  ),
 );
 function rustFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -119,9 +131,26 @@ for (const directory of rustRoots) {
       /\bprocess\s*::\s*(?:Command|\*|\{[^}]*\bCommand\b)|\bCommand\s*::\s*new|\buse\s+std\s*::\s*process\s*(?:;|as)/.test(source) &&
       resolve(file) !== approvedVendorOwner &&
       resolve(file) !== approvedProcessOwner &&
+      resolve(file) !== approvedPowercfgOwner &&
       resolve(file) !== approvedProcessFixture
     ) {
       fail(`${relative(root, file)} contains forbidden runtime process execution`);
+    }
+    if (resolve(file) === approvedPowercfgOwner) {
+      const launches = source.match(/\bCommand\s*::\s*new\b/g) ?? [];
+      if (
+        launches.length !== 1 ||
+        !/\["\/hibernate",\s*if enabled \{ "on" \} else \{ "off" \}\]/.test(source) ||
+        !/const POWERCFG_EXE: &str = "powercfg\.exe";/.test(source) ||
+        /\.arg\s*\(|\bformat!\s*\(/.test(source)
+      ) {
+        fail(`${relative(root, file)} must launch only powercfg.exe /hibernate on|off with fixed argv`);
+      }
+    }
+    if (systemModuleFiles.has(resolve(file)) || systemModuleDirs.some((dir) => resolve(file).startsWith(dir + sep))) {
+      if (/"(?:[^"\\]|\\.)*\b(?:cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?|schtasks(?:\.exe)?|netsh(?:\.exe)?|sc\.exe|reg\.exe|wmic(?:\.exe)?|pnputil(?:\.exe)?)\b/i.test(source)) {
+        fail(`${relative(root, file)} references a shell or management CLI; use typed Windows APIs`);
+      }
     }
     // Detect imported/aliased APIs too, not just call expressions. Fixture paths get no native exception.
     if (/\b(?:CreateProcess(?:AsUser|WithLogon|WithToken)?[AW]?|ShellExecute(?:Ex)?[AW]?|WinExec|NtCreateUserProcess|RtlCreateUserProcess)\b/.test(source) &&

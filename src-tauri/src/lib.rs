@@ -9,12 +9,29 @@ use windows_platform::{StartupWindowMode, cleanup::CleanupService, startup_windo
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     windows_platform::privilege::require_standard_user()?;
 
-    let background_start = startup_window_mode() == StartupWindowMode::Background;
+    let scheduled_scan = windows_platform::scheduler::parse_scheduled_scan_args(
+        &std::env::args_os().skip(1).collect::<Vec<_>>(),
+    );
     let context = tauri::generate_context!();
+
+    if let Some(schedule_id) = scheduled_scan.as_ref() {
+        // Headless, read-only scan launched by the app's own task. The Tauri app
+        // is never built here: building it creates the main webview (which
+        // loads the frontend against unmanaged state) and briefly shows a
+        // window before `exit` takes effect.
+        let app_data = scheduled_scan_app_data(&context.config().identifier)?;
+        windows_platform::scheduler::run_scheduled_scan(schedule_id, &app_data)?;
+        return Ok(());
+    }
+    let background_start = startup_window_mode() == StartupWindowMode::Background;
 
     tauri::Builder::default()
         .setup(move |app| {
             let app_data = app.path().app_data_dir()?;
+            app.manage(Arc::new(
+                windows_platform::system_change::SystemChangeService::windows(&app_data)
+                    .map_err(|_| std::io::Error::other("system change journal unavailable"))?,
+            ));
             let cleanup_service = Arc::new(
                 CleanupService::new(app_data)
                     .map_err(|_| std::io::Error::other("cleanup service initialization failed"))?,
@@ -103,10 +120,40 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::storage::release_storage_scan,
             commands::storage::create_storage_plan,
             commands::foundation::foundation_status,
-            commands::security::create_system_restore_point
+            commands::security::create_system_restore_point,
+            commands::system_change::preview_system_change,
+            commands::system_change::create_system_change_plan,
+            commands::system_change::confirm_system_change_plan,
+            commands::system_change::execute_system_change_plan,
+            commands::system_change::system_change_journal,
+            commands::system_change::create_system_rollback_plan,
+            commands::startup::list_startup_items,
+            commands::services::list_services,
+            commands::drivers::list_driver_packages,
+            commands::firewall::get_firewall_status,
+            commands::hosts::get_hosts_report,
+            commands::privacy::get_privacy_report,
+            commands::power::get_power_status,
+            commands::restore::list_restore_points,
+            commands::restore::get_restore_protection,
+            commands::updates::get_windows_update_status,
+            commands::updates::detect_windows_updates,
+            commands::scheduler::list_scan_schedules,
+            commands::scheduler::list_scheduled_scan_summaries,
+            commands::optimizer::get_optimizer_proposals
         ])
         .run(context)?;
     Ok(())
+}
+
+/// The same directory Tauri's `app_data_dir()` resolves on Windows
+/// (roaming AppData joined with the bundle identifier), without building an app.
+fn scheduled_scan_app_data(identifier: &str) -> std::io::Result<std::path::PathBuf> {
+    let roaming = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| std::io::Error::other("APPDATA is not an absolute path"))?;
+    Ok(roaming.join(identifier))
 }
 
 #[cfg(test)]

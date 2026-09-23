@@ -24,6 +24,11 @@ use windows_sys::Win32::{
 };
 
 use super::RestorePointDescription;
+use crate::restore::{RestorePointSource, WmiRestorePointSource};
+
+/// Bounded wait for a newly ended restore point to appear in WMI.
+const VERIFY_ATTEMPTS: u32 = 5;
+const VERIFY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
 
 const BEGIN_SYSTEM_CHANGE: u32 = 100;
 const END_SYSTEM_CHANGE: u32 = 101;
@@ -56,6 +61,9 @@ pub enum RestorePointError {
     Com(i32),
     Status(u32),
     MissingEntryPoint,
+    /// Windows reported success, but no restore point with the returned
+    /// sequence number exists (for example a failed shadow copy).
+    NotCreated,
 }
 
 impl fmt::Display for RestorePointError {
@@ -65,6 +73,7 @@ impl fmt::Display for RestorePointError {
             Self::Com(_) => "COM initialization for System Restore failed",
             Self::Status(_) => "Windows rejected the System Restore operation",
             Self::MissingEntryPoint => "Windows System Restore entry point is unavailable",
+            Self::NotCreated => "Windows did not create the restore point",
         })
     }
 }
@@ -86,8 +95,35 @@ pub struct WindowsRestorePointBackend;
 
 impl RestorePointBackend for WindowsRestorePointBackend {
     fn create(&self, description: &RestorePointDescription) -> Result<i64, RestorePointError> {
-        create_restore_point(description)
+        let sequence_number = create_restore_point(description)?;
+        verify_created(sequence_number, &WmiRestorePointSource, || {
+            std::thread::sleep(VERIFY_DELAY)
+        })
     }
+}
+
+/// `SRSetRestorePointW` can report success without a usable point, so
+/// success requires the returned sequence number to be listed by WMI. Any
+/// listing failure also fails closed.
+fn verify_created(
+    sequence_number: i64,
+    source: &impl RestorePointSource,
+    mut wait: impl FnMut(),
+) -> Result<i64, RestorePointError> {
+    for attempt in 0..VERIFY_ATTEMPTS {
+        if attempt > 0 {
+            wait();
+        }
+        let listed = source
+            .query()
+            .map_err(|_| RestorePointError::NotCreated)?
+            .iter()
+            .any(|point| point.sequence_number.map(i64::from) == Some(sequence_number));
+        if listed {
+            return Ok(sequence_number);
+        }
+    }
+    Err(RestorePointError::NotCreated)
 }
 
 fn create_restore_point(description: &RestorePointDescription) -> Result<i64, RestorePointError> {
@@ -344,6 +380,61 @@ mod tests {
 
         assert!(matches!(error, RestorePointError::Status(5)));
         assert_eq!(calls, vec![BEGIN_SYSTEM_CHANGE]);
+    }
+
+    struct Listing(Vec<Result<Vec<u32>, i32>>, std::cell::Cell<usize>);
+
+    impl RestorePointSource for Listing {
+        fn query(
+            &self,
+        ) -> Result<Vec<crate::restore::RawRestorePoint>, crate::restore::WmiFailure> {
+            let call = self.1.get();
+            self.1.set(call + 1);
+            let response = self.0[call.min(self.0.len() - 1)].clone();
+            response
+                .map(|sequences| {
+                    sequences
+                        .into_iter()
+                        .map(|sequence| crate::restore::RawRestorePoint {
+                            sequence_number: Some(sequence),
+                            ..Default::default()
+                        })
+                        .collect()
+                })
+                .map_err(crate::restore::WmiFailure)
+        }
+    }
+
+    #[test]
+    fn listed_sequence_is_verified() {
+        let source = Listing(vec![Ok(vec![7, 123])], Default::default());
+        assert_eq!(verify_created(123, &source, || {}).unwrap(), 123);
+        assert_eq!(source.1.get(), 1);
+    }
+
+    #[test]
+    fn reported_success_without_a_listed_point_is_not_created() {
+        let source = Listing(vec![Ok(vec![7])], Default::default());
+        let mut waits = 0;
+        let error = verify_created(123, &source, || waits += 1).unwrap_err();
+        assert!(matches!(error, RestorePointError::NotCreated));
+        assert_eq!(source.1.get(), VERIFY_ATTEMPTS as usize);
+        assert_eq!(waits, VERIFY_ATTEMPTS - 1);
+    }
+
+    #[test]
+    fn a_point_that_appears_late_is_verified() {
+        let source = Listing(vec![Ok(vec![]), Ok(vec![123])], Default::default());
+        assert_eq!(verify_created(123, &source, || {}).unwrap(), 123);
+    }
+
+    #[test]
+    fn listing_failure_fails_closed() {
+        let source = Listing(vec![Err(-1)], Default::default());
+        assert!(matches!(
+            verify_created(123, &source, || {}),
+            Err(RestorePointError::NotCreated)
+        ));
     }
 
     #[test]

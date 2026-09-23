@@ -3,6 +3,7 @@ pub mod helper;
 pub mod path_policy;
 pub mod protocol;
 pub mod restore_point;
+pub mod system_changes;
 
 use std::fmt;
 

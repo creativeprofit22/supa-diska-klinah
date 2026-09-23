@@ -177,13 +177,48 @@ if (
 }
 if (
   !/TOKEN_BYTES: usize = 32/.test(protocolSource) ||
-  !/MAX_FRAME_BYTES: usize = 4 \* 1024/.test(protocolSource) ||
+  !/PROTOCOL_VERSION: u8 = 2;/.test(protocolSource) ||
+  !/MAX_FRAME_BYTES: usize = 16 \* 1024/.test(protocolSource) ||
   !/AUTHORIZATION_LIFETIME_SECONDS: u64 = 60/.test(protocolSource) ||
   !/SOCKET_TIMEOUT: Duration = Duration::from_secs\(120\)/.test(brokerSource) ||
   !/HANDSHAKE_DEADLINE: Duration = Duration::from_secs\(90\)/.test(brokerSource) ||
   !/PrivilegedOperation::CreateSystemRestorePoint/.test(helperSource)
  ) {
   fail("helper authentication, bounds, timeouts, or operation allowlist drifted");
+}
+
+// ADR 0002: exact privileged operation and system-change variant sets.
+const enumVariants = (source, name) => {
+  const body = source.match(new RegExp(`pub enum ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1];
+  if (!body) fail(`${name} could not be parsed`);
+  return [...body.matchAll(/^ {4}([A-Z][A-Za-z]+)\b/gm)].map((match) => match[1]).sort();
+};
+const systemChangesSource = read("src-tauri/crates/windows-platform/src/security/system_changes.rs");
+const expectedOperations = ["ApplySystemChanges", "CreateSystemRestorePoint"];
+const expectedHelperChanges = [
+  "CreateRestorePoint",
+  "DeleteDriverPackage",
+  "EditHosts",
+  "SetFirewallProfileEnabled",
+  "SetFirewallRuleEnabled",
+  "SetHibernation",
+  "SetMachinePolicyValue",
+  "SetMachineStartupEntry",
+  "SetServiceStartType",
+  "SetSystemTaskEnabled",
+  "SetWindowsUpdatePolicy",
+];
+if (
+  enumVariants(protocolSource, "PrivilegedOperation").join() !== expectedOperations.join() ||
+  enumVariants(systemChangesSource, "HelperChange").join() !== expectedHelperChanges.join() ||
+  !/deny_unknown_fields/.test(systemChangesSource.slice(0, systemChangesSource.indexOf("pub enum HelperChange"))) ||
+  /\b(?:PathBuf|OsString|Command)\b|path:\s*String|command:\s*String|key:\s*String/.test(
+    systemChangesSource.slice(systemChangesSource.indexOf("pub enum HelperChange"), systemChangesSource.indexOf("impl HelperChange")),
+  ) ||
+  !/validate_batch\(&items\)/.test(helperSource) ||
+  !/batch_fits_frame/.test(brokerSource)
+) {
+  fail("helper operation or system-change variant set drifted from ADR 0002");
 }
 
 if (
