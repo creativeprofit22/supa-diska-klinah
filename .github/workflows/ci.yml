@@ -41,6 +41,9 @@ jobs:
         run: rustup show
         working-directory: src-tauri
 
+      - name: Check assigned strict development and preview ports
+        run: pnpm check:ports
+
       - name: Check immutable dependency pins
         run: pnpm check:dependencies
 
@@ -88,8 +91,13 @@ jobs:
         # Reuse the workspace test target; the driver keeps its locked precompile
         # outside the bounded race handshake. No privileged smoke helper is used.
         run: |
+          $global:LASTEXITCODE = $null
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-duplicate-keeper.ps1
           $driverExit = $LASTEXITCODE
+          if ($null -eq $driverExit) {
+            Write-Host 'Duplicate keeper driver did not run; failing closed.'
+            exit 1
+          }
           Write-Host "Duplicate keeper driver exit code: $driverExit"
           exit $driverExit
 
@@ -132,9 +140,66 @@ jobs:
       - name: Build native debug executable
         run: pnpm tauri build --debug --no-bundle --target ${{ matrix.target }}
 
-      - name: Verify native project discovery as standard user
+      # One owned standard-user lifecycle runs both the project discovery smoke and
+      # the expanded storage smoke against the executable just built for this target.
+      - name: Verify native project discovery and storage workflows as standard user
         shell: pwsh
-        run: ./scripts/smoke-native-ci.ps1 -Target ${{ matrix.target }} -BuildRevision $env:GITHUB_SHA -ArtifactDirectory "artifacts/native-smoke/${{ matrix.target }}"
+        run: ./scripts/smoke-native-ci.ps1 -Target ${{ matrix.target }} -StorageSmoke -BuildRevision $env:GITHUB_SHA -ArtifactDirectory "artifacts/native-smoke/${{ matrix.target }}"
+
+      # Renderer replay needs the runner's already-installed Edge, which only the x64
+      # image provides. It owns its own strict preview on 1521 and no other process.
+      - name: Replay actual storage routes in the preview browser
+        if: matrix.architecture == 'x64'
+        timeout-minutes: 20
+        shell: pwsh
+        run: |
+          $edge = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'
+          if (-not (Test-Path -LiteralPath $edge)) {
+            Write-Host 'Installed Edge is required for the actual-route replay; failing closed.'
+            exit 1
+          }
+          $preview = Start-Process -FilePath 'pnpm.cmd' -ArgumentList 'preview' -PassThru -WindowStyle Hidden
+          $replayExit = $null
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 120; $attempt++) {
+              if ($preview.HasExited) {
+                throw "Owned preview exited with code $($preview.ExitCode) instead of serving strict port 1521."
+              }
+              try {
+                $client = [Net.Sockets.TcpClient]::new('127.0.0.1', 1521)
+                $client.Dispose()
+                $ready = $true
+                break
+              }
+              catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $ready) { throw 'Owned preview never bound strict port 1521.' }
+            $global:LASTEXITCODE = $null
+            node scripts/smoke-storage-frontend.mjs --remaining
+            $replayExit = $LASTEXITCODE
+          }
+          finally {
+            if (-not $preview.HasExited) {
+              # Only the preview this step started; no unrelated listener is touched.
+              & "$env:SystemRoot\System32\taskkill.exe" /PID $preview.Id /T /F | Out-Null
+              $preview.WaitForExit(10000) | Out-Null
+            }
+            $preview.Dispose()
+          }
+          $destination = "artifacts/native-smoke/${{ matrix.target }}/storage-frontend"
+          New-Item -ItemType Directory -Path $destination -Force | Out-Null
+          if (Test-Path -LiteralPath '.gg/smoke-artifacts/remaining-storage-routes') {
+            Copy-Item -Path '.gg/smoke-artifacts/remaining-storage-routes/*' -Destination $destination -Recurse -Force
+          }
+          if ($null -eq $replayExit) {
+            Write-Host 'Storage route replay did not report an exit code; failing closed.'
+            exit 1
+          }
+          Write-Host "Storage route replay exit code: $replayExit"
+          exit $replayExit
 
       - name: Upload native smoke evidence
         if: always()

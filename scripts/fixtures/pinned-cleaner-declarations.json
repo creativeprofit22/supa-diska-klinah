@@ -1,0 +1,13 @@
+{
+  "revision": "db09e051d0615121e659db187e3799438acbc9e6",
+  "derivation": "SHA-256 of sorted canonical declaration JSON strings, computed from independently fetched pinned Kudu JSON by upstreamDeclarations. Local catalogs are checked separately with localDeclarations. No upstream runtime code is executed.",
+  "catalogs": [
+    {"source":"rules/win32/apps.json","local":"apps-caches.json","sourceSha256":"f159b5f558731fb5c156ffcafbfa86452f6281588a36512765d900a4e8aade94","count":334,"sha256":"8278c1fed5a1dbaac20882e6b303847aad68664f5f577f0df756dc5a427787d4"},
+    {"source":"rules/win32/gpu-cache.json","local":"gpu-caches.json","sourceSha256":"5b797b66ac27de97f3ddcb60509362c59f17d54373b86ea4d2a5c2dce1c845d7","count":9,"sha256":"8390fe3e494d32b5f9493c3fe43b2fa813c4c69b98189999f8eb1bb69b9d4af4"},
+    {"source":"rules/win32/system.json","local":"system-caches.json","sourceSha256":"58bee36bfd54a1e1f5908b8d11780799e69501e1f14920aa0d1327bf7bf405c0","count":55,"sha256":"06058c3f8cc1742267e32569833a1fe1979853d5be1bd7677f3da932d67e67c6"},
+    {"source":"rules/win32/gaming.json","local":"gaming-caches.json","sourceSha256":"c043bf95a232e4b0ce7a27bb50cfd7ee8d0749297f26c285554cf6b6710d04b7","count":39,"sha256":"5c41d53f2d11e7dc4793e9744068163a5f892a39056d795ff4543f88da34d6e8"},
+    {"source":"rules/win32/misc.json","local":"misc-caches.json","sourceSha256":"dfa3733e4985d98439c24bb59210fd7664726caa7287423f59cf7deac894cb9c","count":16,"sha256":"eb139f0118b8c2556c97f6f2017b1e35a4acbabce957dcf31e81b1fb7bea7095"},
+    {"source":"rules/win32/steam.json","local":"steam-caches.json","sourceSha256":"054bf9a5c53ec33b71e03620e2874f806ae416cf2c33ffc9722346c11318bf4e","count":23,"sha256":"6342a44c8dfda647dacb42feadcebad93c1a5154d0059445081a4fc0cd56aaa5"},
+    {"source":"rules/win32/databases.json","local":"database-maintenance.json","sourceSha256":"b43448170c5c2fb8c09fa512214a1ed471e8f539cbdc332e729b0743f355dd59","count":108,"sha256":"0be90b4df07cc567ca28d7832ec60d020c26466ecb8ef22fcb876ad9657bc607"}
+  ]
+}

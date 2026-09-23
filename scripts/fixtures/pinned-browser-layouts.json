@@ -1,0 +1,32 @@
+{
+  "revision": "db09e051d0615121e659db187e3799438acbc9e6",
+  "source": "rules/win32/browsers.json",
+  "notice": "Kudu MIT, Copyright (c) 2026 Advent Development Inc. See THIRD_PARTY_NOTICES.md. Reference fields transcribed from the pinned source, not the local catalog.",
+  "chromiumCacheDirs": {
+    "profile": ["Cache/Cache_Data", "Code Cache", "GPUCache", "Service Worker/CacheStorage", "Shared Dictionary/cache", "DawnWebGPUCache", "DawnGraphiteCache"],
+    "shared": ["component_crx_cache", "extensions_crx_cache", "GrShaderCache", "ShaderCache", "GraphiteDawnCache", "GPUPersistentCache", "PnaclTranslationCache"]
+  },
+  "chromium": [
+    { "key": "chrome", "base": "${LOCALAPPDATA}/Google/Chrome/User Data" },
+    { "key": "edge", "base": "${LOCALAPPDATA}/Microsoft/Edge/User Data" },
+    { "key": "brave", "base": "${LOCALAPPDATA}/BraveSoftware/Brave-Browser/User Data" },
+    { "key": "opera", "base": "${APPDATA}/Opera Software/Opera Stable" },
+    { "key": "operaGX", "base": "${APPDATA}/Opera Software/Opera GX Stable" },
+    { "key": "vivaldi", "base": "${LOCALAPPDATA}/Vivaldi/User Data" },
+    { "key": "arc", "base": "${LOCALAPPDATA}/Arc/User Data" },
+    { "key": "chromium", "base": "${LOCALAPPDATA}/Chromium/User Data" },
+    { "key": "thorium", "base": "${LOCALAPPDATA}/Thorium/User Data" },
+    { "key": "supermium", "base": "${LOCALAPPDATA}/Supermium/User Data" },
+    { "key": "helium", "base": "${LOCALAPPDATA}/imput/Helium/User Data" },
+    { "key": "cromite", "base": "${LOCALAPPDATA}/Cromite/User Data" },
+    { "key": "catsxp", "base": "${LOCALAPPDATA}/ArcSoft/CatsXP/User Data" }
+  ],
+  "firefox": { "base": "${APPDATA}/Mozilla/Firefox/Profiles", "cache": "${LOCALAPPDATA}/Mozilla/Firefox/Profiles" },
+  "firefoxForks": [
+    { "key": "librewolf", "base": "${APPDATA}/LibreWolf/Profiles", "cache": "${LOCALAPPDATA}/LibreWolf/Profiles" },
+    { "key": "waterfox", "base": "${APPDATA}/Waterfox/Profiles", "cache": "${LOCALAPPDATA}/Waterfox/Profiles" },
+    { "key": "floorp", "base": "${APPDATA}/Floorp/Profiles", "cache": "${LOCALAPPDATA}/Floorp/Profiles" },
+    { "key": "zen", "base": "${APPDATA}/Zen/Profiles", "cache": "${LOCALAPPDATA}/Zen/Profiles" }
+  ],
+  "safari": null
+}

@@ -9,6 +9,8 @@ const requiredDocuments = [
   "docs/project-artifacts.md",
   "docs/release-checklist.md",
   "docs/security.md",
+  "docs/storage.md",
+  "docs/verification/storage-parity.md",
   "docs/licensing.md",
   "docs/adr/0001-modular-boundaries.md",
   "CONTRIBUTING.md",
@@ -60,4 +62,18 @@ for (const required of [
     process.exit(1);
   }
 }
-console.log("Threat model, privilege inventory, recovery, and README links verified.");
+const storage = readFileSync("docs/storage.md", "utf8");
+const verification = readFileSync("docs/verification/storage-parity.md", "utf8");
+for (const heading of ["## Choose the right tool", "## Scan, inspect, then decide", "## Recovery is not reclaimed space", "## Installed programs are different"]) {
+  if (!storage.includes(heading)) {
+    console.error(`Documentation check failed: storage guide lacks ${heading}`);
+    process.exit(1);
+  }
+}
+for (const page of ["disk-analyzer-readonly", "large-files", "cleaner", "duplicate-empty", "browser", "uninstaller", "storage-ui"]) {
+  if (!existsSync(`docs/verification/${page}.md`) || !verification.includes(`](${page}.md)`)) {
+    console.error(`Documentation check failed: missing or unlinked storage evidence: ${page}`);
+    process.exit(1);
+  }
+}
+console.log("Threat model, privilege inventory, recovery, storage evidence, and README links verified.");
