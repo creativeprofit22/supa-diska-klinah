@@ -2,7 +2,21 @@
 
 This inventory maps Kudu v2.4.0 at commit `db09e051d0615121e659db187e3799438acbc9e6`. The source of record is [`src/main/ipc/index.ts`](https://github.com/AdventDevInc/kudu/blob/db09e051d0615121e659db187e3799438acbc9e6/src/main/ipc/index.ts). It is a planning contract, not evidence of behavioral parity.
 
-`Contract mapped` means ownership has a destination but no complete compatible module contract is implemented. `Not verified` means complete module equivalence and required acceptance evidence have not been established; bounded source-comparison cases can pass without completing the module. The foundation-only `foundation_status` command is deliberately excluded from parity claims. A narrow restore-point creation command now exists, but the broader Restore module remains contract-mapped and unverified until parity behavior is exercised.
+`Contract mapped` means ownership has a destination but no complete compatible module contract is implemented. `Not verified` means complete module equivalence and required acceptance evidence have not been established; bounded source-comparison cases can pass without completing the module. The foundation-only `foundation_status` command is deliberately excluded from parity claims. System-management rows marked `Implemented` became `Verified` when the owner accepted their manual privileged acceptance on Windows 10 22H2 (2026-09-23). Windows 11 was not run.
+
+## System-management coverage
+
+Implemented system-management rows are wired end to end: typed adapters, read-only inventory commands, the shared preview → plan → native confirmation → journal flow, and frontend pages. They are `Verified` by the manual privileged acceptance in [system-management verification](verification/system-management.md), which the owner accepted on 2026-09-23 on Windows 10 22H2. Windows 11 23H2/24H2 elevated acceptance was not run; the owner accepted that gap. See the [user guide](system-management.md) and the [administrator guide](system-management-admin.md).
+
+Adaptations and gaps against Kudu:
+
+- **Startup:** entries can be enabled or disabled through `StartupApproved`. Deleting entries is not offered, and boot trace is out of scope.
+- **Drivers:** only superseded, unbound `oem*.inf` packages can be removed, and the removal is irreversible. Driver update scan and install are not offered.
+- **Hosts:** a hash-guarded disable/restore of individual lines, with a backup. Kudu only checks for tampering.
+- **Scheduler:** Microsoft task toggles live in Privacy. The Scheduler page manages this app's own read-only scan tasks, created through Task Scheduler COM rather than `schtasks` XML.
+- **Windows Update policy** (`commands::updates`, `features/updates`) is an addition that uses documented policy values. Kudu's winget Software Updater (`Updates` row) is out of scope and remains contract-mapped under a separate target.
+- **Quick optimization** (`commands::optimizer`, `features/optimizer`) composes individually selectable changes from the services, privacy, and power catalogs. It is not Kudu's database optimizer, and it does not port GameMode's Nagle or per-interface TCP tweaks. The `Optimizer` and `GameMode` rows therefore stay contract-mapped.
+- Debloater and Software Updater are not part of this phase.
 
 ## Registered module parity
 
@@ -13,28 +27,28 @@ This inventory maps Kudu v2.4.0 at commit `db09e051d0615121e659db187e3799438acbc
 | LargeFiles | `large-file-finder.ipc.ts` | `commands::large_files` | `windows-platform::storage::large_files` | `features/large-files` | Implemented | Verified |
 | Duplicates | `duplicate-finder.ipc.ts` | `commands::duplicates` | `windows-platform::storage::duplicates` | `features/duplicates` | Implemented | Verified |
 | Memory | `perf-monitor.ipc.ts` | `commands::memory` | `windows-platform::performance` | `features/memory` | Contract mapped | Not verified |
-| Startup | `startup-manager.ipc.ts` | `commands::startup` | `windows-platform::startup` | `features/startup` | Contract mapped | Not verified |
+| Startup | `startup-manager.ipc.ts` | `commands::startup` | `windows-platform::startup_items` | `features/startup` | Implemented | Verified |
 | Registry | `registry-cleaner.ipc.ts` | `commands::registry` | `windows-platform::registry` | `features/registry` | Contract mapped | Not verified |
 | Uninstaller | `program-uninstaller.ipc.ts` | `commands::uninstaller` | `windows-platform::storage::uninstaller` | `features/uninstaller` | Implemented | Verified |
-| Drivers | `driver-manager.ipc.ts` | `commands::drivers` | `windows-platform::drivers` | `features/drivers` | Contract mapped | Not verified |
+| Drivers | `driver-manager.ipc.ts` | `commands::drivers` | `windows-platform::drivers` | `features/drivers` | Implemented | Verified |
 | Network | `network-cleanup.ipc.ts` | `commands::network` | `windows-platform::network` | `features/network` | Contract mapped | Not verified |
 | DiskHealth | `perf-monitor.ipc.ts` | `commands::disk_health` | `windows-platform::storage` | `features/disk-health` | Contract mapped | Not verified |
 | StorageSense | `disk-analyzer.ipc.ts` | `commands::storage_sense` | `windows-platform::storage` | `features/storage-sense` | Contract mapped | Not verified |
 | Battery | `perf-monitor.ipc.ts` | `commands::battery` | `windows-platform::power` | `features/battery` | Contract mapped | Not verified |
 | Debloater | `debloater.ipc.ts` | `commands::debloater` | `windows-platform::packages` | `features/debloater` | Contract mapped | Not verified |
-| Privacy | `privacy-shield.ipc.ts` | `commands::privacy` | `windows-platform::privacy` | `features/privacy` | Contract mapped | Not verified |
+| Privacy | `privacy-shield.ipc.ts` | `commands::privacy` | `windows-platform::privacy` | `features/privacy` | Implemented | Verified |
 | Optimizer | `database-optimizer.ipc.ts` | `commands::optimizer` | `windows-platform::optimizer` | `features/optimizer` | Contract mapped | Not verified |
-| System | `service-manager.ipc.ts` | `commands::system` | `windows-platform::system` | `features/system` | Contract mapped | Not verified |
-| Telemetry | `privacy-shield.ipc.ts` | `commands::telemetry` | `windows-platform::privacy` | `features/telemetry` | Contract mapped | Not verified |
+| System | `service-manager.ipc.ts` | `commands::services` | `windows-platform::services` | `features/services` | Implemented | Verified |
+| Telemetry | `privacy-shield.ipc.ts` | `commands::privacy` | `windows-platform::privacy` | `features/privacy` | Implemented | Verified |
 | Notifications | `breach-monitor.ipc.ts` | `commands::notifications` | `windows-platform::notifications` | `features/notifications` | Contract mapped | Not verified |
-| PowerPlan | `game-mode.ipc.ts` | `commands::power_plan` | `windows-platform::power` | `features/power-plan` | Contract mapped | Not verified |
-| Hosts | `malware-scanner.ipc.ts` | `commands::hosts` | `windows-platform::network` | `features/hosts` | Contract mapped | Not verified |
-| Restore | `index.ts` restore-point handlers | `commands::restore` | `windows-platform::restore` | `features/restore` | Contract mapped | Not verified |
+| PowerPlan | `game-mode.ipc.ts` | `commands::power` | `windows-platform::power` | `features/power` | Implemented | Verified |
+| Hosts | `malware-scanner.ipc.ts` | `commands::hosts` | `windows-platform::hosts` | `features/hosts` | Implemented | Verified |
+| Restore | `index.ts` restore-point handlers | `commands::restore` | `windows-platform::restore` | `features/restore` | Implemented | Verified |
 | Environment | `environment-cleaner.ipc.ts` | `commands::environment` | `windows-platform::environment` | `features/environment` | Contract mapped | Not verified |
 | Repair | `disk-analyzer.ipc.ts` | `commands::repair` | `windows-platform::repair` | `features/repair` | Contract mapped | Not verified |
-| Scheduler | `privacy-shield.ipc.ts` | `commands::scheduler` | `windows-platform::scheduler` | `features/scheduler` | Contract mapped | Not verified |
-| Updates | `software-updater.ipc.ts` | `commands::updates` | `windows-platform::updates` | `features/updates` | Contract mapped | Not verified |
-| Firewall | `firewall-audit.ipc.ts` | `commands::firewall` | `windows-platform::firewall` | `features/firewall` | Contract mapped | Not verified |
+| Scheduler | `privacy-shield.ipc.ts` | `commands::scheduler` | `windows-platform::scheduler` | `features/scheduler` | Implemented | Verified |
+| Updates | `software-updater.ipc.ts` | `commands::software_updater` | `windows-platform::software_updater` | `features/software-updater` | Contract mapped | Not verified |
+| Firewall | `firewall-audit.ipc.ts` | `commands::firewall` | `windows-platform::firewall` | `features/firewall` | Implemented | Verified |
 | ContextMenu | `context-menu-cleaner.ipc.ts` | `commands::context_menu` | `windows-platform::shell` | `features/context-menu` | Contract mapped | Not verified |
 | Gpu | `gaming-cleaner.ipc.ts` | `commands::gpu` | `windows-platform::graphics` | `features/gpu` | Contract mapped | Not verified |
 | BootTrace | `startup-manager.ipc.ts` | `commands::boot_trace` | `windows-platform::startup` | `features/boot-trace` | Contract mapped | Not verified |
@@ -54,15 +68,15 @@ These groups cover handlers implemented directly in Kudu's `index.ts` rather tha
 | Settings and backup directory | `index.ts:122-167` | `commands::settings` | `windows-platform::settings` | `features/settings` | Contract mapped | Not verified |
 | Onboarding | `index.ts:169-176` | `commands::onboarding` | `windows-platform::settings` | `features/onboarding` | Contract mapped | Not verified |
 | Elevation | `index.ts:178-222` | `commands::elevation` | `windows-platform::elevation` | `features/elevation` | Contract mapped | Not verified |
-| Restore points | `index.ts:224-232` | `commands::restore` | `windows-platform::restore` | `features/restore` | Contract mapped | Not verified |
+| Restore points | `index.ts:224-232` | `commands::restore` | `windows-platform::restore` | `features/restore` | Implemented | Verified |
 | Scan, deletion, and cloud history | `index.ts:234-302` | `commands::history` | `windows-platform::history` | `features/history` | Contract mapped | Not verified |
 | Updater operations | `index.ts:304-308` | `commands::updater` | `windows-platform::updates` | `features/updates` | Contract mapped | Not verified |
 
 ## Privilege classification
 
-The complete inventory is classified as standard-user, mixed, or helper-only in [`security.md`](security.md). Classification is not permission. Only restore-point creation is currently approved for the elevated helper. Kudu's whole-application elevation route is rejected; scanning and ordinary cleanup remain standard integrity.
+The complete inventory is classified as standard-user, mixed, or helper-only in [`security.md`](security.md). Classification is not permission. The elevated helper accepts only restore-point creation and `ApplySystemChanges`, a batch of the closed, typed `HelperChange` set reviewed in [ADR 0002](adr/0002-system-change-helper.md). It has no shell-string or arbitrary-path operation. Kudu's whole-application elevation route is rejected; scanning and ordinary cleanup remain standard integrity.
 
-Manual temporary-cache cleanup is implemented at standard integrity with opaque Rust-owned plans, final containment revalidation, Windows Recycle Bin undo, app quarantine, delayed opt-in purge, and separate permanent confirmation. No privileged or arbitrary-path delete, command, registry, service, or shell operation is exposed.
+Manual temporary-cache cleanup is implemented at standard integrity with opaque Rust-owned plans, final containment revalidation, Windows Recycle Bin undo, app quarantine, delayed opt-in purge, and separate permanent confirmation. Cleanup exposes no privileged or arbitrary-path delete, command, or shell operation. Registry, service, and other system changes exist only as the typed system-management changes above.
 
 Coding-project discovery is implemented as an original read-only extension, not a Kudu-equivalence claim. Explicit saved roots, ID-only management, marker-aware rules for Rust, Node and major frameworks, Python, .NET, Gradle/Maven, CMake, Unity, Unreal, and Godot, nested-project handling, typed rebuild intelligence, aggregate bounds, and conservative unselected results are covered in the [project artifact guide](project-artifacts.md). Project-artifact selection and cleanup remain deliberately unreachable.
 

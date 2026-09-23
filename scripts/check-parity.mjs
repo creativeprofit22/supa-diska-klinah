@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { resolve, relative, isAbsolute } from "node:path";
 
 const parityPath = resolve(import.meta.dirname, "..", "docs", "parity.md");
@@ -106,6 +106,29 @@ for (const row of storageRows) {
   references.forEach(requireActualFixture);
   if (row[6] === "Verified" && row[5] !== "Implemented") {
     fail(`unimplemented storage capability cannot be verified: ${row[0]}`);
+  }
+}
+// Implemented module rows must name targets that exist in the tree.
+function existsInProject(path) {
+  try {
+    return statSync(resolve(projectRoot, path));
+  } catch {
+    return null;
+  }
+}
+for (const row of [...moduleRows, ...directRows].filter((candidate) => candidate[5] === "Implemented")) {
+  const command = row[2].match(/^`commands::(\w+)`$/)?.[1];
+  const rust = row[3].match(/^`windows-platform::([\w:]+)`$/)?.[1];
+  const feature = row[4].match(/^`features\/([\w-]+)`$/)?.[1];
+  if (!command || !existsInProject(`src-tauri/src/commands/${command}.rs`)) {
+    fail(`implemented row names a missing command module: ${row[0]}`);
+  }
+  const rustPath = `src-tauri/crates/windows-platform/src/${rust?.replaceAll("::", "/")}`;
+  if (!rust || !(existsInProject(`${rustPath}.rs`) || existsInProject(`${rustPath}/mod.rs`))) {
+    fail(`implemented row names a missing Rust module: ${row[0]}`);
+  }
+  if (!feature || !existsInProject(`src/features/${feature}`)?.isDirectory()) {
+    fail(`implemented row names a missing frontend feature: ${row[0]}`);
   }
 }
 console.log("Kudu parity contract verified.");

@@ -51,15 +51,32 @@ Build profile registration is the only route that accepts an executable, argv, w
 
 A process already executing inside the standard-integrity app can request the same bounded restore-point operation the app exposes or invoke an already approved build profile. Native approval, fixed argv, executable identity, one active build, explicit paths, protected generations, and recoverable quarantine cap the build-profile blast radius. They do not sandbox an intentionally approved executable or protect against an attacker who already controls an administrator process.
 
-## Approved privileged operation
+## Approved privileged operations
 
-`CreateSystemRestorePoint` is the only approved helper operation. Its sole argument is a nonempty description containing no control or NUL characters and no more than 128 UTF-16 code units. It accepts no path, executable, registry key, service, command, or shell string. It creates and closes a `MODIFY_SETTINGS` restore point and returns only its sequence number.
+The helper accepts exactly two operations (protocol version 2, 16 KiB frames). `ApplySystemChanges` is reviewed in [ADR 0002](adr/0002-system-change-helper.md). It carries 1 to 32 entries of the closed `HelperChange` enum:
+
+- service start type
+- machine policy value
+- Microsoft task enable state
+- Windows Update policy
+- firewall rule and profile
+- hibernation
+- driver package removal
+- hosts line disable/restore
+- machine startup entry
+- restore point
+
+Every identifier resolves against a catalog compiled into the helper or against a live enumeration. The helper re-reads the prior state, and it writes nothing when that state has changed since the preview. It returns one `{ prior, outcome }` per entry. The only process it launches is `<System32>\powercfg.exe` with the fixed argv `/hibernate on|off`. `scripts/check-security-boundaries.mjs` pins the exact variant set, and `scripts/check-architecture.mjs` bans shell and management-CLI strings in system-management modules.
+
+The webview never sends helper entries. It previews typed changes, receives an opaque single-use plan ID that expires after 60 seconds, and cannot confirm. A native Windows dialog lists every change and its reversibility. Execution journals intent before each change and the outcome after it. See the [administrator guide](system-management-admin.md).
+
+`CreateSystemRestorePoint` remains available as a standalone operation. Its sole argument is a nonempty description containing no control or NUL characters and no more than 128 UTF-16 code units. It accepts no path, executable, registry key, service, command, or shell string. It creates and closes a `MODIFY_SETTINGS` restore point and returns only its sequence number.
 
 Cleanup commands accept opaque scan, candidate, plan, and execution identifiers. Rust resolves paths, journals before and after each item, and fails individual items closed. Manual cleanup defaults to the Windows Recycle Bin; automatic cleanup and artifact budgets use recoverable quarantine before opt-in delayed purge. Artifact eviction never uses the privileged helper and never permanently deletes directly.
 
 ## Privileged-operation inventory
 
-This classification covers every Kudu v2.4.0 module recorded in `docs/parity.md`. “Standard” means the expected parity path should remain unelevated. “Mixed” means most inspection stays standard and a future narrow mutation may need a newly reviewed helper enum variant. “Helper-only” means the parity operation is genuinely administrative. Classification is not authorization; only restore-point creation is currently implemented in the helper.
+This classification covers every Kudu v2.4.0 module recorded in `docs/parity.md`. “Standard” means the expected parity path should remain unelevated. “Mixed” means most inspection stays standard and narrow mutations need a reviewed helper enum variant. “Helper-only” means the parity operation is genuinely administrative. Classification is not authorization. The implemented helper surface is exactly the ADR 0002 set above. HKCU startup and privacy values, active power plan, and this app's own scheduled scans stay unelevated.
 
 | Classification | Kudu modules |
 | --- | --- |
