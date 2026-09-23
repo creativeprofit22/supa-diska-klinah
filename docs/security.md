@@ -12,7 +12,7 @@ The normal Tauri process runs at standard integrity. Its manifest requests `asIn
 | --- | --- |
 | Webview to Rust IPC | Only local content in the `main` webview receives explicit application-command permissions. Rust validates typed input. |
 | Project discovery input | Only root add accepts an untrusted absolute path, bounded to 4,096 UTF-8 bytes. Rust rejects empty, relative, lexical-parent, control-containing, missing, file, identity-less, drive, protected, and reparse roots, then stores the canonical path under an opaque ID. List, pause, remove, and scan accept IDs only. |
-| Top-level navigation | Production accepts only `http://tauri.localhost`; development additionally accepts exactly `http://127.0.0.1:1420`. Credentials, remote hosts, alternate ports, schemes, and lookalikes are rejected. |
+| Top-level navigation | Production accepts only `http://tauri.localhost`; development additionally accepts exactly `http://127.0.0.1:1520`. Credentials, remote hosts, alternate ports (including browser preview port 1521), schemes, and lookalikes are rejected. |
 | Standard app to elevated helper | The helper exposes one operation enum, authenticates one loopback connection, enforces request freshness, then exits. |
 | Loopback transport | The app binds `127.0.0.1` first, uses a random 256-bit token and independent request ID, caps frames at 4 KiB, applies 120-second socket timeouts, and permits 60-second authorizations within a 90-second handshake deadline. Tokens are compared without early exit and are not logged. |
 | Filesystem containment | Rust rejects relative paths, lexical `..`, root equality, sibling-prefix confusion, missing paths, and every reparse-point component before and after canonicalization. |
@@ -23,7 +23,23 @@ The normal Tauri process runs at standard integrity. Its manifest requests `asIn
 | Windows elevation | Only Windows UAC and the separately manifested helper cross into high integrity. The helper checks its own process token before dispatch. |
 | System Restore | `SrClient.dll` loads only from System32. COM security is initialized for required local service identities, descriptions are bounded, and begin/end calls are paired. |
 
-No generic filesystem, shell, process, arbitrary-path deletion, registry, service, or remote-content capability is granted. The only standard-integrity process-launch sink is the approved build coordinator; the elevated helper cannot reach it. Destructive cleanup is reachable only through Rust-owned plans; permanent deletion has a distinct command and confirmation. There is no privileged deletion operation.
+No generic filesystem, shell, process, arbitrary-path deletion, registry, service, or remote-content capability is granted. Standard-integrity process-launch sinks are confined to the approved build coordinator and the separate native-confirmed vendor-uninstall boundary; the elevated helper cannot reach either. Vendor operations can cause their own Windows elevation prompt, but the main app does not elevate itself. Destructive cleanup is reachable only through Rust-owned plans; permanent deletion has a distinct command and confirmation. There is no privileged deletion operation.
+
+## Storage workflow boundaries
+
+Storage commands accept bounded Raw JSON objects, not positional arrays, arbitrary paths or serialized proof records. Native folder selection or exact known-folder/browser scope resolution creates opaque, module-bound, single-use root authorizations. Status, page, cancel, release and plan selection remain snapshot-bound. A cancelled scan cannot produce mutation authority through retained rows. Catalog scope requests are serialized in the frontend so late refreshes cannot invalidate the latest UI inventory.
+
+Fixed-drive `displayMount` is derived from the native validated logical mount: exactly three ASCII bytes, uppercase `A`–`Z` followed by `:\`. It is display-only in direct inventory and shared drive records, never a renderer-selected filesystem root or identity authority. Opaque `driveId`, retained volume evidence and native revalidation remain authoritative; volume GUIDs and serials stay native. Warning identifiers keep the same bounded canonical format and never include arbitrary native error paths.
+
+Disk analysis and drive inventory are read-only. File cleanup requires native candidate evidence and an immutable plan. The user-approved recovery adaptation uses the existing journal with same-volume file-only app recovery: a held source handle, pinned no-follow destination ancestors, native directory-relative rename, and no overwrite/copy-delete fallback. Restoring checks the original root, original file identity/metadata, exact native-derived recovery location, current protections and occupancy. Browser restore also rechecks browser activity/scope. Storage recovery is not automatically purged. Empty folders remain permanent-only and use atomic empty-only removal; a new child prevents deletion.
+
+Permanent execution now requires an app-owned native window and a default-No native confirmation displaying the native-resolved plan. Validation occurs before and after confirmation. Vendor jobs independently bind registry and executable evidence, require their own native confirmation and revalidation, never accept caller argv, and never replay stored commands. A vendor exit does not prove removal; cancellation/timeout need not terminate the vendor. Unknown-ownership leftovers never become filesystem targets.
+
+Traversal limits count directory recursion from the native-authorized root. Files in the last permitted directory remain visible; deeper directories remain blocked and totals marked incomplete. The 64-directory depth cap, visited-entry/record caps, no-follow identity checks and immutable-plan eligibility are unchanged.
+
+The optional pinned-source verification tool reads only fixed-revision JSON from the upstream raw-content host, refuses redirects, and bounds request time and response bytes. It does not execute downloaded code, update fixtures automatically, or grant catalog authority. Offline checks preserve unsupported Steam/database maintenance and private-data exclusions. The native smoke uses an immutable bridge, application-only WebView input and a read-only command allowlist; its inventory results are recorded as counts rather than program names.
+
+No new elevated-helper operation or journal schema was added. Native scopes, plan summaries and displayed paths are not permission to bypass identity, browser-activity, duplicate-keeper or protected-root checks. Same-volume limits and unverified native/manual evidence are recorded in [storage verification](verification/storage-parity.md); this document is not a security certification.
 
 ## Attacker model and assumptions
 
