@@ -32,6 +32,17 @@ export function AppShell() {
           <NavLink to="/browser">Browser caches</NavLink>
           <NavLink to="/uninstaller">Installed programs</NavLink>
           <NavLink to="/cleanup">Cleanup</NavLink>
+          <NavLink to="/optimizer">Quick optimization</NavLink>
+          <NavLink to="/startup">Startup apps</NavLink>
+          <NavLink to="/services">Windows services</NavLink>
+          <NavLink to="/privacy">Privacy</NavLink>
+          <NavLink to="/firewall">Firewall</NavLink>
+          <NavLink to="/hosts">Hosts file</NavLink>
+          <NavLink to="/power">Power and hibernation</NavLink>
+          <NavLink to="/drivers">Driver packages</NavLink>
+          <NavLink to="/restore-points">Restore points</NavLink>
+          <NavLink to="/windows-update">Windows Update</NavLink>
+          <NavLink to="/scheduled-scans">Scheduled scans</NavLink>
           <NavLink to="/settings">Settings</NavLink>
         </nav>
       </aside>
