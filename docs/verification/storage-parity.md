@@ -411,6 +411,150 @@ flows are untested, and the permanent-deletion default button is taken from the 
 The operator's "Yes looked highlighted" observation is recorded, not resolved. The matrix storage
 rows were then marked Verified in `docs/parity.md`.
 
+### Harness evidence blocker: parallel build-artifact timeouts, 2026-09-23 UTC
+
+These are harness observations, not gate approval.
+
+- `cargo test --workspace` failed earlier: two storage tests hit "not enough disk space" because
+  C: had 31 MB free (later 4 MB). A separate run with TMP/TEMP set to `src-tauri/target/tmp` passed
+  those storage tests.
+- `da9f234f-f098-444b-8df0-bdb794c3649c`: `cargo test --locked -p windows-platform --lib
+  build_artifacts -- --test-threads=1` with TMP/TEMP set to `src-tauri/target/tmp`: 21 passed, 0 failed.
+- Old files in the user Temp folder were then cleared (345 MB). C: then had about 39 GB free;
+  most of that space was freed outside this change.
+- `f58f2b8e-d776-4eee-b20e-88ec8a09c64a`: `cargo test --locked --workspace` using the default temp
+  folder: every crate passed except `windows-platform` lib (366 passed, 2 failed, 2 ignored). The
+  storage tests passed. `real_budget_enforcement_quarantines_only_stale_artifact_and_preserves_protected_bytes`
+  and `real_warm_cargo_build_keeps_debug_and_incremental_state` panicked at
+  `build_artifacts.rs:1871` ("build run did not finish"). That is the roughly 2-second
+  `wait_for_terminal` limit in the test helper, hit while tests run in parallel. Both tests pass
+  when run single-threaded. The tests are unchanged.
+
+Blocker: the default parallel `cargo test --workspace` is not fully green, because real-cargo
+build-artifact tests are timing-sensitive under load.
+
+## System-management elevated acceptance: 2026-09-23 UTC
+
+Phase: Windows system-management parity. Checklist source: the 12-row elevated checklist in
+`docs/verification/system-management.md`.
+
+- **Machine:** the owner's own PC, not a disposable one. Windows 10 Pro 22H2, build 19045.6466, Spanish UI.
+  The owner authorised running all 12 rows here, undoing each one, and backing up and restoring the
+  driver package used in row 9. Windows Sandbox was tried first but could not show UAC prompts.
+- **Build:** debug built app from the uncommitted working tree on `feat/windows-system-management`
+  (HEAD `470a4ff`, 79 changed paths). Built with `pnpm tauri build --debug --no-bundle --target x86_64-pc-windows-msvc`
+  on fnm Node 24.19.0 / pnpm 11.22.0. `supa-diska-klinah.exe` SHA-256 `5F25BA4B…CAFFE46`, pid 19324.
+- **Driver:** `scripts/acceptance-system-builtapp.ps1` (new). It launches the app with a loopback-only
+  WebView2 debug port and calls the real system-change commands. It never sends synthetic input. The owner
+  clicked every native confirmation (Sí/No) and every UAC prompt.
+- **Evidence:** per-step results in `.gg/smoke-artifacts/system-acceptance/steps.jsonl` (untracked). Each
+  row's app result was cross-checked against Windows directly (service config, registry, `schtasks`,
+  `Get-NetFirewallProfile`, hosts SHA-256, `powercfg`, `pnputil`, `vssadmin`).
+
+| # | Result | Apply plan → journal entry | Undo plan → journal entry | Independent check |
+| --- | --- | --- | --- | --- |
+| 1 | **Pass** | `ee25c94d…` → `27507452…` | `6b8bc7e1…` → `486038df…` | Fax Disabled → Manual → Disabled |
+| 2 | **Pass** | `e3d93bda…` → `1e45fe8c…` | `b77b61d0…` → `820e5f6e…` | `DisabledByGroupPolicy` absent → 1 → absent |
+| 3 | **Pass** | `e00423b3…` → `75c001a4…` | `c1921fce…` → `00e4b401…` | CEIP Consolidator Ready → Disabled → Ready |
+| 4 | **Pass** | `76348cfb…` → `e65142b5…` | `24adf307…` → `d2bdeea4…` | `NoAutoRebootWithLoggedOnUsers` absent → 1 → absent. Home edition not tested |
+| 5 | **Pass** (2nd attempt) | `e63d9ac9…` → `9c4f6a27…`, `52567c64…` | `e5391bea…` → `75154931…`, `06e0a19c…` | Rule `BranchCache Peer Discovery (WSD-In)` off → on → off; Domain profile on → off → on |
+| 6 | **Pass** | `cabc584d…` → `bd840dcf…` | `9b413b83…` → `bb50334c…` | hosts SHA-256 identical before and after; backup files present in `%ProgramData%\SupaDiskaKlinah\hosts-backups` |
+| 7 | **Pass** | `14870883…` → `6e447d09…` | `dcb59f6c…` → `54cda196…` | Lightshot (HKLM Run32) enabled → disabled → enabled |
+| 8 | **Pass** (reversed direction) | `7e44c0de…` → `9a674397…` | `9ee41759…` → `2eadd3e8…` | Hibernation off → on → off; `hiberfil.sys` absent at the end |
+| 9 | **Pass after fix** (retest below). First run: **fail, restore point missing** | `ea62cf1c…` → restore point `11a49fae…` (reported `applied`), driver `5f7adadd…` | n/a (irreversible) | `oem77.inf` removed in one plan with one UAC prompt, then restored from backup. **No restore point exists** (see below) |
+| 10 | **Pass** (3rd attempt) | `e795c8e1…` → `df39d9db…`, `7037c103…` both `denied` | none needed | Fax stayed Disabled, ad-ID policy stayed absent; journal grew 29 → 31 with denied entries only |
+| 11 | **Pass** | `8f9db80c…` → `32c62846…` `stateChanged` | none needed | Fax changed externally to Automatic after review. The app wrote nothing (still Automatic); the owner's value (Disabled) was then restored with `sc config` |
+| 12 | **Pass** | 4 changes, `requiresHelper: false`, all `standard` (`ddf78033…`, `532d584d…`, `856b2c22…`, `16ac5359…`) | `5992be91…`, `ef458833…`, `2a02b15c…`, `e1bcc900…` | UAC process `consent.exe` was polled every second and never appeared. f.lux (HKCU Run), Start suggestions, power plan (Equilibrado → Alto rendimiento → Equilibrado) and the weekly scan task all restored; 0 tasks under `\SupaDiskaKlinah\` |
+
+Tool execution IDs for each row's final run: 1 `9668237b-7e7b-490e-ad6a-7d15c4530518`,
+2 `8faf5710-e34d-4fef-b81c-5c42e4037121`, 3 `7d4d5150-bb2d-40fd-a9fb-2eab837def94`,
+4 `c2f07aca-304c-42cd-a7dc-bcf3f50cfddf`, 5 `3202bcba-b274-4512-971d-ddc8a0221e81`,
+6 `999f4c47-2d39-42cd-8f84-247421c95ec4`, 7 `81c00510-749a-4656-b667-135344ad3292`,
+8 `9e73eaa1-cd14-4ec5-9de7-c9251a37fa38`, 9 `ad8bd2d5-bbc6-4b71-ac28-e352d806ac6b`,
+10 `17f0bc4c-57e6-4196-aadc-8d07111347b7`, 11 `f3beb8f7-ee35-425b-be9b-5a0a85208693`,
+12 `50e56876-554e-4b7c-9416-11a50744a1a5`. Driver export `5790fe0d-aac5-406e-a4d7-f213712c3f01`;
+driver re-add and enumeration `83ee3063-5f11-428c-b797-7714235a9972`; device binding and restore-point
+check `5f650ced-0fd1-4816-9146-c0e4bea47c31`; VSS and shadow-storage check
+`e567cb8d-2e02-4a9b-922f-53683eaca737`; ID summary `1bd1a1a9-2ef9-4d36-b72f-32f36a605d9b`.
+
+### Deviations and findings
+
+- **Row 9 defect: the restore point is reported created but does not exist.** The plan reported
+  `createRestorePoint` as `applied`. Afterwards, elevated checks found `Get-ComputerRestorePoint` empty,
+  `vssadmin list shadows` and `list shadowstorage` both empty, and a VSS error 8193 at 18:15:04 UTC
+  (`QueryFullProcessImageNameW`, `HR = 0x80070006`) during `DoSnapshotSet`. Protection reports enabled with
+  a 1440-minute frequency, but no earlier point exists that could explain a silent skip. The app's own
+  restore-point list returns `requiresAdministrator` from the standard session, so it cannot show the
+  point either. The checklist item "restore point listed" is therefore **not met**. The helper must
+  verify that a new sequence number exists before reporting `applied`.
+- **Row 9 driver backup and restore.** `pnputil /export-driver oem77.inf E:\sdk-sbx\driver-backup\oem77`
+  (exit 0) saved `ssudadb.inf` SHA-256 `dbcb8c6f…` and `ssudAdb.cat` SHA-256 `03024117…`. The app then
+  deleted `oem77.inf` (Samsung Android USB 2.12.4.0, superseded). `pnputil /add-driver … /install`
+  (exit 0) re-added it with the same published name `oem77.inf`, and `pnputil /enum-drivers` lists it
+  again. Both Samsung ADB devices stayed bound to `oem91.inf` 2.21.4.0 throughout, as before the test.
+- **Row 5 first attempt refused (by design).** The rule display name `Detección de redes (SSDP de entrada)`
+  matches several rules with mixed enabled states, so the plan was refused as `unsupported` before any
+  prompt. A uniquely named rule was used instead.
+- **Row 8 first attempt.** Turning hibernation off while it was already off recorded a no-op. Asking to
+  undo it returned `rollbackUnavailable`. Nothing changed; the row was rerun as on → off.
+- **Row 10 accidental approvals.** The first two runs were approved (plans `0b325c3d…` and `0b9711e5…`)
+  because the owner had not yet been told to click No. Both were undone through the app's rollback before
+  the valid declined run.
+- **Copy defect.** The Fax → Manual impact text says faxing "stops working". That describes Disabled, not Manual.
+- **Native dialog.** The confirmation uses localized Sí/No buttons with No as the default. The acceptance
+  instructions must name the buttons in the OS language.
+
+### Row 9 fix and retest
+
+- **Fix:** before reporting success, the elevated helper now requires the sequence number returned by
+  `SRSetRestorePointW` to appear in `ROOT\DEFAULT:SystemRestore`. It checks up to 5 times, 1 s apart.
+  Otherwise it fails closed with `SystemRestoreFailure`, so the existing batch guard blocks the
+  irreversible driver removal. The fix is in `security/restore_point.rs` (`verify_created`) and covers both
+  the dashboard restore-point button and planned batches. Four new unit tests cover it: listed, never
+  listed, listed late, and listing error. `cargo test -p windows-platform --lib security::` passed 44/44 and
+  `cargo clippy -p windows-platform -p privileged-helper --all-targets -D warnings` was clean
+  (execution `5d293a2b-69fc-48ac-9e7f-541c2b52278e`). After the retest, `cargo test -p windows-platform
+  -p privileged-helper` passed 375 + 5 with 3 ignored (execution `7680a6c6-27f4-4af6-b5f9-007960b4fadf`).
+  The full frontend, `pnpm check` and built-app suites were not rerun after this fix.
+- **Rebuilt app:** `pnpm tauri build --debug --no-bundle` (execution `2601c0f3-a0c5-4841-ab4b-b46f4096bd65`).
+  `supa-diska-klinah.exe` SHA-256 `82668712…3E3531`, pid 22532. The rebuilt helper contains the WMI
+  restore-point query, which it did not before.
+- **Retest** (execution `ed0088f5-c317-4327-b861-3ecdab856efc`): plan `ea75ac3a…` with one UAC prompt.
+  `createRestorePoint` was `applied` (journal `bf27fae0…`) and `deleteDriverPackage oem77.inf` was
+  `applied` (journal `78608815…`).
+- **Independent check** (execution `8babce22-0c2f-4de5-a840-243c555c6782`, elevated): WMI lists restore
+  point **157**, "Supa Diska Klinah acceptance row 9 retest", created 19:38:04 UTC. `vssadmin list shadows`
+  shows shadow copy `{670e2ccd…}` on C:. `oem77.inf` was absent, then `pnputil /add-driver … /install`
+  (exit 0) re-added it as `oem77.inf` 2.12.4.0, and `pnputil /enum-drivers` lists it. Both Samsung ADB
+  devices remain on `oem91.inf` 2.21.4.0 (execution `5da87a0c-12fa-4b00-b78d-9b396536a2a1`).
+
+### Windows 11 manual-acceptance gap
+
+Windows 11 23H2/24H2 elevated acceptance was **not run**. The owner accepted this gap on 2026-09-23.
+GitHub CI covers build and automated tests only. It does not run UAC or elevated apply/undo, so it is not
+a substitute for this checklist.
+
+### Status
+
+All 12 rows pass on Windows 10 22H2. Row 9 passes after the restore-point verification fix and retest.
+Windows 11 is not run; the owner accepted that gap. **Accepted by the owner on 2026-09-23.** `docs/parity.md`
+now marks the 11 implemented system-management rows `Verified`.
+
+Final gates after acceptance, on fnm Node 24.19.0 / pnpm 11.22.0:
+
+- `pnpm test`: 285 passed across 39 files (execution `034eca85-380a-4eac-9347-28169bd01ae2`). The earlier
+  record of 41 files/288 tests included two dashboard restore-point test files. The phase's uncommitted
+  work deleted them when the dashboard became a link to the Restore points page; restore-point tests live in
+  `features/restore` and the Rust helper.
+- `pnpm check`: passed after the parity-row update, including "Kudu parity contract verified." (execution
+  `1b0e57c4-493f-4dad-9735-3d0d3156e67f`).
+- `cargo test --workspace --locked`: the first run had 2 timing failures in build-artifact tests that spawn
+  real `cargo` builds (unrelated code; both pass alone). The rerun passed 527, failed 0, ignored 4
+  (execution `a201709d-75ca-46de-b09c-8adcb39303e4`).
+- `cargo clippy --workspace --all-targets --locked -D warnings`: passed. `cargo fmt --all --check` passed
+  after formatting `restore_point.rs` and `journal_store.rs` (executions `00a8c384…`, `242f858d…`,
+  `f321c14d…`).
+
 ## Completion remains gated
 
 **2026-09-23: the project owner waived Narrator verification for this phase.** The app is for
