@@ -65,10 +65,10 @@ export function DriveInventoryPage() {
           )}
           {state.inventory.drives.length > 0 && (
             <ul className="drive-list" aria-label="Fixed drives">
-              {state.inventory.drives.map((drive, index) => (
+              {state.inventory.drives.map((drive) => (
                 <li className="status-panel" key={drive.driveId}>
                   <div className="readiness-heading">
-                    <h2>{drive.label.trim() || `Unlabelled drive ${index + 1}`}</h2>
+                    <h2>{drive.label.trim() || "Unlabelled drive"} ({drive.displayMount})</h2>
                     {drive.system === true && <strong>System drive</strong>}
                     {drive.system === null && <span>System classification unavailable</span>}
                   </div>

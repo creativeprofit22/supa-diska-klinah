@@ -1,0 +1,16 @@
+.analyzer-page { max-inline-size: 52rem; min-inline-size: 0; overflow-wrap: anywhere; }
+.analyzer-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 0.75rem; }
+.analyzer-controls label { display: grid; gap: 0.35rem; }
+.analyzer-controls input { inline-size: 8rem; max-inline-size: 100%; padding: 0.65rem; font: inherit; }
+.analyzer-path { overflow-wrap: anywhere; }
+.analyzer-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: 1rem; }
+.analyzer-totals dt { color: var(--muted); }
+.analyzer-totals dd { margin: 0.25rem 0 0; font-weight: 600; }
+.analyzer-breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0; list-style: none; }
+.analyzer-breadcrumbs li { min-inline-size: 0; max-inline-size: 100%; }
+.analyzer-breadcrumbs button,
+.analyzer-folder { max-inline-size: 100%; white-space: normal; overflow-wrap: anywhere; text-align: start; }
+.analyzer-records li { padding-block: 0.75rem; }
+.analyzer-page [aria-pressed="true"],
+.analyzer-page [aria-current="location"] { background: var(--surface-selected); color: var(--text); border-color: var(--accent); }
+.analyzer-page .cleanup-state-panel { margin-block: 1rem; }

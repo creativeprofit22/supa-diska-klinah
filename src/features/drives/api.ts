@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface DriveSummary {
   driveId: string;
+  /** Native canonical drive letter for display only, never a filesystem root input. */
+  displayMount: string;
   label: string;
   filesystem: string;
   totalBytes: number;

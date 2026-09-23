@@ -1,0 +1,5 @@
+.duplicates-page { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 1rem; max-width: 52rem; overflow-wrap: anywhere; }
+.duplicates-page fieldset { min-width: 0; display: flex; flex-wrap: wrap; gap: 1rem; }
+.duplicates-page label { display: flex; align-items: center; gap: .5rem; overflow-wrap: anywhere; }
+.duplicates-page input[type="number"] { width: 8rem; max-width: 100%; }
+.duplicates-page li { overflow-wrap: anywhere; }

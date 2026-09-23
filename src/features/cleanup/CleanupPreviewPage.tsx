@@ -114,10 +114,17 @@ export function CleanupPreviewPage() {
         </section>
       )}
 
-      {state.history.length > 0 && (
+      {(
         <section className="cleanup-history" aria-labelledby="cleanup-history-heading">
           <h2 id="cleanup-history-heading">Cleanup history</h2>
-          <ul>{state.history.slice(0, 20).map((item) => <li key={item.executionId}><span>{item.disposition}</span><span>{formatBytes(item.accounting.reclaimedBytes)} reclaimed</span></li>)}</ul>
+          <button type="button" disabled={state.busy || state.history.loading} onClick={() => void state.history.refresh()}>Refresh newest cleanup history</button>
+          <button type="button" disabled={state.busy || state.history.loading || state.history.nextCursor === null} onClick={() => void state.history.older()}>Older cleanup history</button>
+          <p>Up to 20 executions per page.</p>
+          {state.history.loading && <p role="status">Loading cleanup history…</p>}
+          {state.history.error && <p role="alert">{state.history.error}</p>}
+          {!state.history.loaded && !state.history.loading && !state.history.error && <p>Cleanup history has not been loaded.</p>}
+          {state.history.loaded && !state.history.loading && !state.history.error && (state.history.records.length === 0 && state.history.currentCursor === null ? <p>No cleanup history yet.</p> : state.history.nextCursor === null && <p>End of cleanup history.</p>)}
+          <ul>{state.history.records.map((item) => <li key={item.executionId}><span>{item.disposition}</span><span>{formatBytes(item.accounting.reclaimedBytes)} reclaimed</span>{item.items.some(outcome => outcome.state === "recycled" || outcome.state === "quarantined") && <button type="button" disabled={state.busy} onClick={() => void state.undo(item.executionId)}>Undo historical cleanup</button>}</li>)}</ul>
         </section>
       )}
       <ProjectArtifactDiscovery />

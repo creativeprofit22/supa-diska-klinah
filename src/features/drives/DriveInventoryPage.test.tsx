@@ -13,7 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const empty: DriveInventory = { drives: [], partial: false, warnings: [] };
 const populated: DriveInventory = {
   ...empty,
-  drives: [{ driveId: "opaque-id", label: "Windows", filesystem: "NTFS", system: true,
+  drives: [{ driveId: "opaque-id", displayMount: "C:\\", label: "Windows", filesystem: "NTFS", system: true,
     totalBytes: 1024 ** 4, usedBytes: 1024 ** 3, freeBytes: 1024 ** 4 - 1024 ** 3 }],
 };
 function deferred() {
@@ -31,7 +31,7 @@ it("loads through the real hook/API and coalesces StrictMode reads without expos
   expect((screen.getByRole("button", { name: "Refresh drives" }) as HTMLButtonElement).disabled).toBe(true);
   expect(invoke).toHaveBeenCalledExactlyOnceWith("list_drive_inventory");
   await act(async () => pending.resolve(populated));
-  expect(screen.getByRole("heading", { name: "Windows" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Windows (C:\\)" })).toBeTruthy();
   expect(screen.getByText("System drive")).toBeTruthy();
   expect(screen.getByText("NTFS")).toBeTruthy();
   expect(screen.getByText("1 TB")).toBeTruthy();
@@ -52,6 +52,23 @@ it("retains capacities and explicitly labels unknown system classification in in
   expect(screen.getByRole("status").textContent).toContain("Incomplete inventory");
   expect(screen.getByText("Windows returned only part of the drive inventory.")).toBeTruthy();
   expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["Refresh drives"]);
+});
+
+it("distinguishes equal and empty labels by native mount, not order or capacity", async () => {
+  const drives = [
+    { ...populated.drives[0]!, driveId: "one", label: "Data", displayMount: "D:\\" },
+    { ...populated.drives[0]!, driveId: "two", label: "Data", displayMount: "C:\\" },
+    { ...populated.drives[0]!, driveId: "three", label: "", displayMount: "F:\\" },
+    { ...populated.drives[0]!, driveId: "four", label: "", displayMount: "E:\\" },
+  ];
+  invoke.mockResolvedValueOnce({ ...empty, drives })
+    .mockResolvedValueOnce({ ...empty, drives: [...drives].reverse() });
+  render(<DriveInventoryPage />);
+  const names = ["Data (D:\\)", "Data (C:\\)", "Unlabelled drive (F:\\)", "Unlabelled drive (E:\\)"];
+  for (const name of names) expect(await screen.findByRole("heading", { name })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Refresh drives" }));
+  for (const name of names) expect(await screen.findByRole("heading", { name })).toBeTruthy();
+  expect(invoke.mock.calls).toEqual([["list_drive_inventory"], ["list_drive_inventory"]]);
 });
 
 it("renders an honest empty inventory", async () => {
@@ -77,16 +94,16 @@ it.each([
   expect(screen.getByRole("status").textContent).toContain("Reading fixed drives");
   await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
   await act(async () => next.resolve(populated));
-  expect(screen.getByRole("heading", { name: "Windows" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Windows (C:\\)" })).toBeTruthy();
 });
 
 it("refreshes instead of leaving stale drives visible during a new read", async () => {
   const next = deferred();
   invoke.mockResolvedValueOnce(populated).mockReturnValueOnce(next.promise);
   render(<DriveInventoryPage />);
-  await screen.findByRole("heading", { name: "Windows" });
+  await screen.findByRole("heading", { name: "Windows (C:\\)" });
   fireEvent.click(screen.getByRole("button", { name: "Refresh drives" }));
-  expect(screen.queryByRole("heading", { name: "Windows" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Windows (C:\\)" })).toBeNull();
   await act(async () => next.resolve(empty));
   expect(screen.getByRole("heading", { name: "No fixed drives found" })).toBeTruthy();
 });
@@ -108,12 +125,12 @@ it("renders native labels as text and gives unlabelled drives a fallback", async
   const drive = populated.drives[0]!;
   invoke.mockResolvedValue({ ...empty, drives: [
     { ...drive, label: "<img src=x onerror=alert(1)>" },
-    { ...drive, driveId: "second-id", label: "  ", filesystem: "", system: false },
+    { ...drive, driveId: "second-id", displayMount: "D:\\", label: "  ", filesystem: "", system: false },
   ] });
   const { container } = render(<DriveInventoryPage />);
-  expect(await screen.findByRole("heading", { name: "<img src=x onerror=alert(1)>" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "<img src=x onerror=alert(1)> (C:\\)" })).toBeTruthy();
   expect(container.querySelector("img")).toBeNull();
-  expect(screen.getByRole("heading", { name: "Unlabelled drive 2" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Unlabelled drive (D:\\)" })).toBeTruthy();
   expect(screen.getByText("Not reported")).toBeTruthy();
 });
 
@@ -133,7 +150,7 @@ it("is reachable through the actual shell navigation and route", async () => {
   const router = createMemoryRouter([{ path: "/", element: <AppShell />, children: [drivesRoute] }]);
   render(<RouterProvider router={router} />);
   fireEvent.click(screen.getByRole("link", { name: "Drives" }));
-  expect(await screen.findByRole("heading", { name: "Windows" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Windows (C:\\)" })).toBeTruthy();
   expect(screen.getByRole("link", { name: "Drives" }).getAttribute("aria-current")).toBe("page");
   expect(document.title).toBe("Drives | Supa Diska Klinah");
   expect(invoke).toHaveBeenCalledExactlyOnceWith("list_drive_inventory");
