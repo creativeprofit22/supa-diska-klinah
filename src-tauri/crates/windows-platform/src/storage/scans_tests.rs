@@ -68,6 +68,7 @@ fn rows(service: &StorageService, count: usize, limit: usize) -> String {
                 for n in (0..count).rev() {
                     let record = StorageRecord::Drive(analysis::DriveSummary {
                         drive_id: opaque_id()?,
+                        display_mount: "C:\\".into(),
                         label: n.to_string(),
                         filesystem: "fixture".into(),
                         total_bytes: 10,
@@ -92,6 +93,86 @@ fn rows(service: &StorageService, count: usize, limit: usize) -> String {
             },
         )
         .unwrap()
+}
+// Kudu analyzes whole drives. With the real protection policy, the system drive root is
+// authorized for the analyzer (the walk then skips machine roots), while the Windows
+// folder itself and machine roots are still refused.
+#[test]
+fn disk_analyzer_authorizes_whole_drive_root_but_not_machine_roots() {
+    use crate::storage::known_folders::{KnownFolder, KnownFolderResolver, NativeKnownFolders};
+    let protection = crate::storage::current_protection().unwrap();
+    let program_files = NativeKnownFolders
+        .resolve(KnownFolder::ProgramFiles)
+        .unwrap();
+    let drive = program_files.ancestors().last().unwrap().to_path_buf();
+    // The policy's first protected path is the native Windows folder.
+    let windows = protection.protected_paths()[0].clone();
+    assert!(windows.starts_with(&drive));
+    let service = StorageService::new();
+    let id = service
+        .authorize_root_for(&drive, StorageModule::DiskAnalyzer, &protection)
+        .unwrap();
+    let bound = bind_root(&drive, &id, &id, &protection).unwrap();
+    assert_eq!(
+        bound.canonical_path.parent(),
+        None,
+        "root must be the drive root"
+    );
+    for refused in [&windows, &program_files] {
+        assert!(
+            service
+                .authorize_root_for(refused, StorageModule::DiskAnalyzer, &protection)
+                .is_err(),
+            "{} must be refused",
+            refused.display()
+        );
+    }
+}
+#[test]
+fn drive_inventory_pages_by_mount_letter_not_label() {
+    let service = StorageService::new();
+    // Labels sort Z, Y, X while mounts sort C, D, E: the page must follow the mounts.
+    let id = service
+        .start_with(
+            StorageModule::Drives,
+            None,
+            Default::default(),
+            None,
+            |ctx| {
+                for (mount, label) in [("e:\\", "Archive"), ("C:\\", "Zeta"), ("D:\\", "Yard")] {
+                    let drive = analysis::DriveSummary {
+                        drive_id: opaque_id()?,
+                        display_mount: mount.into(),
+                        label: label.into(),
+                        filesystem: "fixture".into(),
+                        total_bytes: 10,
+                        free_bytes: 3,
+                        used_bytes: 7,
+                        system: Some(false),
+                    };
+                    let order = drive_order(&drive);
+                    ctx.push(StorageRecord::Drive(drive), order)?;
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+    wait(&service, &id);
+    let page = service
+        .page(&PageRequest {
+            page_size: 26,
+            ..request(&id)
+        })
+        .unwrap();
+    let mounts: Vec<_> = page
+        .records
+        .iter()
+        .map(|record| match record {
+            StorageRecord::Drive(drive) => drive.display_mount.clone(),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(mounts, vec!["C:\\", "D:\\", "e:\\"]);
 }
 #[test]
 fn paging_bounds_cursors_release_and_two_snapshot_retention() {
@@ -321,6 +402,39 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.base).unwrap();
     }
+}
+#[test]
+fn app_root_authority_is_module_bound_for_start_and_release() {
+    let f = Fixture::new();
+    let service = StorageService::new();
+    let root = service
+        .authorize_root_for(&f.root, StorageModule::LargeFiles, &f.policy)
+        .unwrap();
+    assert!(service.release_for(StorageModule::Cleaner, &root).is_err());
+    assert!(
+        service
+            .start_with(
+                StorageModule::Cleaner,
+                Some(&root),
+                Default::default(),
+                Some(f.policy.clone()),
+                |_| panic!("wrong module must not run")
+            )
+            .is_err()
+    );
+    let id = service
+        .start_with(
+            StorageModule::LargeFiles,
+            Some(&root),
+            Default::default(),
+            Some(f.policy.clone()),
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(wait(&service, &id).phase, StoragePhase::Complete);
+    assert!(service.release_for(StorageModule::Cleaner, &id).is_err());
+    service.release_for(StorageModule::LargeFiles, &id).unwrap();
+    assert!(service.status(&id).is_err());
 }
 #[test]
 fn root_registry_is_bounded_consumed_snapshot_bound_and_revalidated() {

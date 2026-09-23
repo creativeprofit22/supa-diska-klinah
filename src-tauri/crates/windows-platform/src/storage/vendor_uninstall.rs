@@ -481,6 +481,25 @@ pub(super) fn compile_vendor_fixture(destination: &std::path::Path) {
     );
 }
 
+// Test-only: embed a manifest into an already-compiled disposable fixture with the real
+// Microsoft Manifest Tool. Kept beside `compile_vendor_fixture` so process execution stays
+// confined to the approved vendor owner.
+#[cfg(test)]
+pub(super) fn embed_fixture_manifest(
+    mt_exe: &std::path::Path,
+    manifest: &std::path::Path,
+    exe: &std::path::Path,
+) {
+    let status = std::process::Command::new(mt_exe)
+        .arg("-nologo")
+        .arg("-manifest")
+        .arg(manifest)
+        .arg(format!("-outputresource:{};1", exe.display()))
+        .status()
+        .unwrap();
+    assert!(status.success(), "mt.exe must embed the manifest");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

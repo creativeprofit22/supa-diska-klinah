@@ -188,6 +188,17 @@ fn read_record(
     if name.trim().is_empty() {
         return Ok(None);
     }
+    // Like Kudu and Apps & features, hide entries Windows marks as system components
+    // (runtimes and sub-packages owned by another product).
+    match get("SystemComponent")? {
+        None => {}
+        Some(value) if value.kind == REG_DWORD && value.bytes.len() == 4 => {
+            if u32::from_le_bytes(value.bytes.try_into().unwrap()) == 1 {
+                return Ok(None);
+            }
+        }
+        Some(_) => return Err(InventoryError::Malformed),
+    }
     let publisher = text(get("Publisher")?)?;
     let version = text(get("DisplayVersion")?)?;
     let install_date = text(get("InstallDate")?)?;
@@ -409,6 +420,60 @@ mod tests {
         ) -> Result<Option<RegistryValue>, InventoryError> {
             Ok((name == "DisplayName").then(|| string("Same name")))
         }
+    }
+    struct SystemComponents;
+    impl RegistryReader for SystemComponents {
+        fn keys(&self, hive: Hive, view: View) -> Result<Vec<String>, InventoryError> {
+            // One hive/view is enough; the shared user view would repeat these keys.
+            Ok(if (hive, view) == (Hive::Machine, View::Native64) {
+                vec![
+                    "hidden".into(),
+                    "visible".into(),
+                    "zero".into(),
+                    "bad".into(),
+                ]
+            } else {
+                Vec::new()
+            })
+        }
+        fn value(
+            &self,
+            location: &RegistryLocation,
+            name: &str,
+        ) -> Result<Option<RegistryValue>, InventoryError> {
+            let dword = |n: u32| RegistryValue {
+                kind: REG_DWORD,
+                bytes: n.to_le_bytes().to_vec(),
+            };
+            Ok(match (location.subkey.as_str(), name) {
+                (key, "DisplayName") => Some(string(key)),
+                ("hidden", "SystemComponent") => Some(dword(1)),
+                ("zero", "SystemComponent") => Some(dword(0)),
+                ("bad", "SystemComponent") => Some(string("1")),
+                _ => None,
+            })
+        }
+    }
+    #[test]
+    fn system_components_are_hidden_and_malformed_flags_fail_closed() {
+        let mut names = Vec::new();
+        let mut errors = Vec::new();
+        inventory_stream(
+            &SystemComponents,
+            &CancellationToken::new(),
+            &mut |_, record| {
+                match record {
+                    Some(Ok(record)) => names.push(record.display.name),
+                    Some(Err(error)) => errors.push(error),
+                    None => {}
+                }
+                true
+            },
+        )
+        .unwrap();
+        names.sort();
+        assert_eq!(names, vec!["visible".to_string(), "zero".to_string()]);
+        assert_eq!(errors, vec![InventoryError::Malformed]);
     }
     #[test]
     fn shared_user_view_deduplicates_locations_not_display_names() {

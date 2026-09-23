@@ -149,22 +149,29 @@ fn empty_folders_native_late_child_survives_and_recycle_has_no_fallback() {
         } else {
             CleanupDisposition::Permanent
         };
-        let plan = cleanup.create_storage_plan(&s, &all, disposition).unwrap();
-        if !recycle {
-            std::fs::write(dir.join("late.txt"), b"must survive").unwrap();
-        }
+        let plan = cleanup.create_storage_plan(&s, &all, disposition);
         if recycle {
-            cleanup.execute(&plan.plan_id).unwrap();
+            // Unsupported directory dispositions now fail before a plan exists,
+            // not only at mutation. Preserve the original no-fallback invariant.
+            assert!(plan.is_err());
+            assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+            assert!(
+                cleanup
+                    .history_page(crate::history::HistoryRequest::default())
+                    .unwrap()
+                    .records
+                    .is_empty()
+            );
         } else {
+            let plan = plan.unwrap();
+            std::fs::write(dir.join("late.txt"), b"must survive").unwrap();
             cleanup.execute_permanent(&plan.plan_id).unwrap();
-        }
-        assert!(dir.exists());
-        if !recycle {
             assert_eq!(
                 std::fs::read(dir.join("late.txt")).unwrap(),
                 b"must survive"
             );
         }
+        assert!(dir.exists());
     }
 }
 

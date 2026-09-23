@@ -43,6 +43,13 @@ impl std::error::Error for JobError {}
 fn native(e: impl std::fmt::Display) -> JobError {
     JobError::Native(e.to_string())
 }
+/// Page order for the drive inventory: ascending mount ("C:\" before "D:\"), matching Kudu.
+pub fn drive_order(drive: &analysis::DriveSummary) -> RecordOrder {
+    RecordOrder {
+        numeric: 0,
+        text: drive.display_mount.to_ascii_uppercase(),
+    }
+}
 
 /// Clock injection permits expiry tests without sleeping or changing the OS clock.
 pub trait Clock: Send + Sync {
@@ -191,7 +198,7 @@ struct State {
     active: Option<Active>,
     completed: VecDeque<Completed>,
     pages: SnapshotPages,
-    roots: HashMap<String, (Duration, RootAuthorization)>,
+    roots: HashMap<String, (Duration, RootAuthorization, Option<StorageModule>)>,
 }
 impl State {
     fn maintain(&mut self, now: Duration) {
@@ -199,7 +206,7 @@ impl State {
             // A worker can finish just after the caller sampled `now`.
             now.saturating_sub(access) < Duration::from_secs(SNAPSHOT_IDLE_SECONDS)
         };
-        self.roots.retain(|_, (access, _)| fresh(*access));
+        self.roots.retain(|_, (access, _, _)| fresh(*access));
         self.completed.retain(|c| {
             if fresh(c.access) {
                 true
@@ -320,6 +327,26 @@ impl StorageService {
         path: &Path,
         protection: &ProtectionPolicy,
     ) -> Result<String, JobError> {
+        self.authorize_bound_root(path, None, protection)
+    }
+    /// App-issued authorizations cannot be reused by another feature runner.
+    pub fn authorize_root_for(
+        &self,
+        path: &Path,
+        module: StorageModule,
+        protection: &ProtectionPolicy,
+    ) -> Result<String, JobError> {
+        if matches!(module, StorageModule::Drives | StorageModule::Uninstaller) {
+            return Err(StorageError::UnsupportedScope.into());
+        }
+        self.authorize_bound_root(path, Some(module), protection)
+    }
+    fn authorize_bound_root(
+        &self,
+        path: &Path,
+        module: Option<StorageModule>,
+        protection: &ProtectionPolicy,
+    ) -> Result<String, JobError> {
         let id = opaque_id()?;
         let root = bind_root(path, &id, &id, protection)?;
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -328,7 +355,7 @@ impl StorageService {
         if state.roots.len() >= MAX_COMPLETED_SNAPSHOTS {
             return Err(StorageError::LimitReached.into());
         }
-        state.roots.insert(id.clone(), (now, root));
+        state.roots.insert(id.clone(), (now, root, module));
         Ok(id)
     }
     /// Internal typed feature runner. No algorithms for future features are registered.
@@ -362,7 +389,14 @@ impl StorageService {
         }
         let root = match root_id {
             Some(root_id) => {
-                let (_, mut root) = state
+                let (_, _, bound_module) = state
+                    .roots
+                    .get(root_id)
+                    .ok_or(StorageError::InvalidEvidence)?;
+                if bound_module.is_some_and(|bound| bound != module) {
+                    return Err(StorageError::InvalidEvidence.into());
+                }
+                let (_, mut root, _) = state
                     .roots
                     .remove(root_id)
                     .ok_or(StorageError::InvalidEvidence)?;
@@ -414,21 +448,36 @@ impl StorageService {
                     context.phase(StoragePhase::Walking);
                     let result = runner(&mut context);
                     if context.cancellation.is_cancelled() {
+                        // A runner can be interrupted between adding evidence and
+                        // its row. Discard that unfinished builder rather than
+                        // publishing inconsistent or actionable cancelled results.
+                        if context.root.is_some() {
+                            context.builder = SnapshotBuilder::new(
+                                context.snapshot_id.clone(),
+                                module,
+                                context.limits.retained_records,
+                            )?;
+                            context
+                                .status
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .retained_records = 0;
+                        }
                         context.mark_partial(PartialReason::Cancelled);
                     } else {
                         result?;
                     }
-                    let phase = if context.cancellation.is_cancelled() {
-                        StoragePhase::Cancelled
-                    } else {
-                        StoragePhase::Complete
-                    };
                     let snapshot = context.builder.finish(&NativeEntropy, false)?;
-                    context
-                        .status
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .phase = phase;
+                    {
+                        let mut status = context.status.lock().unwrap_or_else(|e| e.into_inner());
+                        // Synchronize terminal publication with cancel(): a
+                        // successful cancellation cannot publish Complete.
+                        status.phase = if context.cancellation.is_cancelled() {
+                            StoragePhase::Cancelled
+                        } else {
+                            StoragePhase::Complete
+                        };
+                    }
                     Ok(Finished {
                         snapshot,
                         root: context.root,
@@ -575,6 +624,7 @@ impl StorageService {
         done.access = now;
         Ok(program)
     }
+    /// Drives are listed by mount letter, like Kudu, never by label (labels repeat or are empty).
     pub fn start_drives(&self, limits: StorageLimits) -> Result<String, JobError> {
         self.start_drives_with_system(limits, drives::system_guid)
     }
@@ -613,10 +663,7 @@ impl StorageService {
                     }
                 };
                 let id = drive.summary.drive_id.clone();
-                let order = RecordOrder {
-                    numeric: 0,
-                    text: drive.summary.label.clone(),
-                };
+                let order = drive_order(&drive.summary);
                 match context.push(StorageRecord::Drive(drive.summary.clone()), order) {
                     Ok(()) => {
                         context.drives.insert(id, drive);
@@ -692,6 +739,14 @@ impl StorageService {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let now = self.clock.now();
         state.maintain(now);
+        // Cancelled/failed snapshots remain inspectable, never selectable for mutation.
+        if !state.completed.iter().any(|done| {
+            done.status.snapshot_id == selection.snapshot_id
+                && done.status.module == selection.module
+                && done.status.phase == StoragePhase::Complete
+        }) {
+            return Err(StorageError::SnapshotUnavailable.into());
+        }
         let evidence = state.pages.resolve(selection, Duration::ZERO)?;
         if let Some(done) = state
             .completed
@@ -721,10 +776,40 @@ impl StorageService {
             && active.id == id
             && !active.released
         {
+            let status = active.status.lock().unwrap_or_else(|e| e.into_inner());
+            if matches!(
+                status.phase,
+                StoragePhase::Complete | StoragePhase::Cancelled | StoragePhase::Failed
+            ) {
+                return Err(StorageError::SnapshotUnavailable.into());
+            }
             active.cancellation.cancel();
             return Ok(());
         }
         Err(StorageError::SnapshotUnavailable.into())
+    }
+    /// Release app-issued roots or scans only in the feature that owns them.
+    pub fn release_for(&self, module: StorageModule, id: &str) -> Result<(), JobError> {
+        let allowed = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.maintain(self.clock.now());
+            state
+                .roots
+                .get(id)
+                .is_some_and(|(_, _, bound)| *bound == Some(module))
+                || state
+                    .completed
+                    .iter()
+                    .any(|c| c.status.snapshot_id == id && c.status.module == module)
+                || state.active.as_ref().is_some_and(|a| {
+                    a.id == id
+                        && a.status.lock().unwrap_or_else(|e| e.into_inner()).module == module
+                })
+        };
+        if !allowed {
+            return Err(StorageError::SnapshotUnavailable.into());
+        }
+        self.release(id)
     }
     pub fn release(&self, id: &str) -> Result<(), JobError> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());

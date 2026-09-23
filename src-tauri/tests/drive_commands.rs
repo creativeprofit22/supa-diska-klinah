@@ -55,6 +55,7 @@ mod adapter {
             let response: Response = response.deserialize().unwrap();
             assert!(response.drives.len() <= DRIVE_LIMIT);
             for drive in response.drives {
+                assert_drive_display_contract(&drive);
                 assert_eq!(
                     drive.total_bytes.checked_sub(drive.free_bytes),
                     Some(drive.used_bytes)
@@ -70,6 +71,117 @@ mod adapter {
             }
             assert!(!state.busy.load(Ordering::Acquire));
         }
+        fn assert_drive_display_contract(drive: &DriveSummary) {
+            let body = tauri::ipc::IpcResponse::body(drive).unwrap();
+            let fields: std::collections::BTreeMap<String, serde::de::IgnoredAny> =
+                body.deserialize().unwrap();
+            let fields: Vec<_> = fields.keys().map(String::as_str).collect();
+            assert_eq!(
+                fields,
+                [
+                    "displayMount",
+                    "driveId",
+                    "filesystem",
+                    "freeBytes",
+                    "label",
+                    "system",
+                    "totalBytes",
+                    "usedBytes",
+                ]
+            );
+            let mount = drive.display_mount.as_bytes();
+            assert_eq!(mount.len(), 3);
+            assert!(mount[0].is_ascii_uppercase());
+            assert_eq!(&mount[1..], b":\\");
+        }
+
+        #[test]
+        fn mocked_drive_records_preserve_display_mount_through_pages_and_adapter() {
+            let service = StorageService::new();
+            let id = service
+                .start_with(
+                    StorageModule::Drives,
+                    None,
+                    StorageLimits::default(),
+                    None,
+                    |ctx| {
+                        for (n, (mount, label)) in [
+                            ("C:\\", "Data"),
+                            ("D:\\", "Data"),
+                            ("E:\\", ""),
+                            ("F:\\", ""),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            ctx.push(
+                                StorageRecord::Drive(DriveSummary {
+                                    drive_id: format!("{n:032x}"),
+                                    display_mount: mount.into(),
+                                    label: label.into(),
+                                    filesystem: "NTFS".into(),
+                                    total_bytes: 100,
+                                    free_bytes: 40,
+                                    used_bytes: 60,
+                                    system: Some(false),
+                                }),
+                                windows_platform::storage::scans::RecordOrder {
+                                    numeric: n as u64,
+                                    text: String::new(),
+                                },
+                            )?;
+                        }
+                        Ok(())
+                    },
+                )
+                .unwrap();
+            let deadline = Instant::now() + TIMEOUT;
+            while service.status(&id).unwrap().0.phase != StoragePhase::Complete {
+                assert!(Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            let page = service
+                .page(&PageRequest {
+                    snapshot_id: id.clone(),
+                    module: StorageModule::Drives,
+                    collection: PageCollection::Drives,
+                    parent_id: None,
+                    cursor: None,
+                    page_size: 26,
+                })
+                .unwrap();
+            #[derive(serde::Deserialize)]
+            struct Page {
+                records: Vec<Record>,
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Record {
+                kind: String,
+                record: DriveSummary,
+            }
+            #[derive(serde::Deserialize)]
+            struct Inventory {
+                drives: Vec<DriveSummary>,
+            }
+            let page: Page = tauri::ipc::IpcResponse::body(page)
+                .unwrap()
+                .deserialize()
+                .unwrap();
+            let inventory = collect(&service, id, deadline).unwrap();
+            let body = tauri::ipc::IpcResponse::body(inventory).unwrap();
+            let inventory: Inventory = body.deserialize().unwrap();
+            assert_eq!(inventory.drives.len(), 4);
+            assert_eq!(page.records.len(), 4);
+            for (n, mount) in ["C:\\", "D:\\", "E:\\", "F:\\"].into_iter().enumerate() {
+                let drive = &inventory.drives[n];
+                assert_drive_display_contract(drive);
+                assert_eq!(drive.display_mount, mount);
+                assert_eq!(page.records[n].kind, "drive");
+                assert_eq!(&page.records[n].record, drive);
+            }
+        }
+
         #[test]
         fn empty_inventory_is_success_and_releases_snapshot() {
             let service = StorageService::new();
@@ -133,6 +245,7 @@ mod adapter {
                         ctx.push(
                             StorageRecord::Drive(DriveSummary {
                                 drive_id: "a".repeat(32),
+                                display_mount: "D:\\".into(),
                                 label: "Readable".into(),
                                 filesystem: "NTFS".into(),
                                 total_bytes: 100,
@@ -151,6 +264,7 @@ mod adapter {
                 .unwrap();
             let result = collect(&service, id, Instant::now() + TIMEOUT).unwrap();
             assert_eq!(result.drives.len(), 1);
+            assert_eq!(result.drives[0].display_mount, "D:\\");
             assert_eq!(result.drives[0].total_bytes, 100);
             assert_eq!(result.drives[0].free_bytes, 40);
             assert_eq!(result.drives[0].used_bytes, 60);
@@ -176,6 +290,47 @@ mod adapter {
                 panic!()
             };
             assert_eq!(json, r#"{"drive":null,"code":"inventory_partial"}"#);
+        }
+
+        #[test]
+        fn warning_serialization_never_exposes_native_identity_or_error_paths() {
+            for mount in [
+                "C:\\private",
+                r"\\?\Volume{private-guid}\",
+                "123456789",
+                "C:\\\n",
+                "",
+                "é:\\",
+            ] {
+                let tauri::ipc::InvokeResponseBody::Json(value) =
+                    tauri::ipc::IpcResponse::body(warning(DriveIssue {
+                        mount: Some(mount.into()),
+                        error: r"C:\private volume GUID private-guid serial 123456789".into(),
+                    }))
+                    .unwrap()
+                else {
+                    panic!()
+                };
+                assert_eq!(value, r#"{"drive":null,"code":"drive_unavailable"}"#);
+            }
+            for letter in b'a'..=b'z' {
+                let tauri::ipc::InvokeResponseBody::Json(value) =
+                    tauri::ipc::IpcResponse::body(warning(DriveIssue {
+                        mount: Some(format!("{}:\\", letter as char)),
+                        error: "private diagnostic".into(),
+                    }))
+                    .unwrap()
+                else {
+                    panic!()
+                };
+                assert_eq!(
+                    value,
+                    format!(
+                        r#"{{"drive":"{}:\\","code":"drive_unavailable"}}"#,
+                        letter.to_ascii_uppercase() as char,
+                    )
+                );
+            }
         }
 
         #[test]

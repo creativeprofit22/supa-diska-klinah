@@ -185,6 +185,7 @@ fn query(mount: &str, system: Option<&str>, id: String) -> io::Result<BoundDrive
     Ok(BoundDrive {
         summary: DriveSummary {
             drive_id: id,
+            display_mount: evidence.mount.clone(),
             label,
             filesystem: evidence.filesystem.clone(),
             total_bytes: total,

@@ -15,6 +15,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use super::{filesystem::wide, recycle::RecycleItem};
 
 pub const MAX_ITEMS: usize = 1_000;
+pub const MAX_EXECUTION_PAGE: usize = 100;
 pub const MAX_PROJECT_ROOTS: usize = 32;
 pub const MAX_BUILD_PROFILES: usize = 32;
 pub const MAX_PROFILE_ARTIFACTS: usize = 16;
@@ -139,7 +140,13 @@ impl CleanupPlan {
                 self.schema_version == PLAN_SCHEMA_VERSION
                     && root.validate().is_ok()
                     && root.snapshot_id == self.scan_id
-                    && self.disposition != CleanupDisposition::Quarantine
+                    && (*module != cleanup_core::storage::StorageModule::EmptyFolders
+                        || self.disposition == CleanupDisposition::Permanent)
+                    && (self.disposition != CleanupDisposition::Quarantine
+                        || self
+                            .items
+                            .iter()
+                            .all(|item| item.proof.kind == cleanup_core::EntryKind::File))
                     && self.items.iter().all(|item| match &item.proof.scope {
                         CandidateProofScope::Storage { evidence } => {
                             evidence.validate().is_ok()
@@ -809,25 +816,115 @@ impl CleanupStorage {
         self.write_execution(journal)
     }
 
-    pub fn executions(&self) -> Result<Vec<ExecutionJournal>, StorageError> {
-        let mut output = Vec::new();
+    /// One validated record at a time, with at most one page of filenames retained.
+    /// Callers must exclude concurrent writers. Atomic replacement during reconciliation
+    /// cannot disturb the traversal: each name page is closed before journals are updated.
+    pub fn execution_records(
+        &self,
+    ) -> impl Iterator<Item = Result<ExecutionJournal, StorageError>> + '_ {
+        let mut names = Vec::new().into_iter();
+        let mut after = None;
+        let mut finished = false;
+        std::iter::from_fn(move || {
+            if finished {
+                return None;
+            }
+            if names.len() == 0 {
+                match self.execution_ids_after(after.as_deref()) {
+                    Ok(page) if page.is_empty() => {
+                        finished = true;
+                        return None;
+                    }
+                    Ok(page) => names = page.into_iter(),
+                    Err(error) => {
+                        finished = true;
+                        return Some(Err(error));
+                    }
+                }
+            }
+            let id = names.next()?;
+            let record = self.read_execution(&id);
+            after = Some(id);
+            finished = record.is_err();
+            Some(record)
+        })
+    }
+
+    fn execution_ids_after(&self, after: Option<&str>) -> Result<Vec<String>, StorageError> {
+        // simplification: O(N² / page size) directory visits, bounded memory and no index
+        // migration. An indexed journal store is the upgrade for very large histories.
+        let mut names = std::collections::BTreeSet::new();
         for entry in fs::read_dir(self.root.join("executions")).map_err(|_| StorageError::Io)? {
             let entry = entry.map_err(|_| StorageError::Io)?;
-            if entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "json")
-            {
-                let journal: ExecutionJournal = read_json(&entry.path())?;
-                journal.validate()?;
-                output.push(journal);
-                if output.len() > MAX_ITEMS {
-                    return Err(StorageError::TooLarge);
+            let path = entry.path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue; // Atomic writer scratch files are not journals.
+            }
+            let id = path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .ok_or(StorageError::Invalid)?;
+            if !valid_id(id) || !entry.file_type().map_err(|_| StorageError::Io)?.is_file() {
+                return Err(StorageError::Invalid);
+            }
+            if after.is_none_or(|after| id > after) {
+                names.insert(id.to_owned());
+                if names.len() > MAX_EXECUTION_PAGE {
+                    names.pop_last();
                 }
             }
         }
-        output.sort_by_key(|journal| std::cmp::Reverse(journal.started_at));
-        Ok(output)
+        Ok(names.into_iter().collect())
+    }
+
+    pub fn has_execution_for_plan(&self, plan_id: &str) -> Result<bool, StorageError> {
+        if !valid_id(plan_id) {
+            return Err(StorageError::Invalid);
+        }
+        for journal in self.execution_records() {
+            if journal?.plan_id == plan_id {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Newest first, with execution ID breaking timestamp ties. Pass the last returned
+    /// (started_at, execution_id) as `before` to reach older retained records; an empty
+    /// page ends traversal. The history IPC pagination task can reuse this native seam.
+    /// Callers hold the shared writer; only page-size keys and one record are scanned.
+    pub fn execution_page(
+        &self,
+        before: Option<(u64, &str)>,
+        limit: usize,
+    ) -> Result<Vec<ExecutionJournal>, StorageError> {
+        if !(1..=MAX_EXECUTION_PAGE).contains(&limit) || before.is_some_and(|(_, id)| !valid_id(id))
+        {
+            return Err(StorageError::Invalid);
+        }
+        let mut keys = std::collections::BTreeSet::new();
+        for journal in self.execution_records() {
+            let journal = journal?;
+            if before
+                .is_none_or(|before| (journal.started_at, journal.execution_id.as_str()) < before)
+            {
+                keys.insert((journal.started_at, journal.execution_id));
+                if keys.len() > limit {
+                    keys.pop_first();
+                }
+            }
+        }
+        keys.into_iter()
+            .rev()
+            .map(|(_, id)| self.read_execution(&id))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub fn executions(&self) -> Result<Vec<ExecutionJournal>, StorageError> {
+        let mut records = self.execution_records().collect::<Result<Vec<_>, _>>()?;
+        records.sort_by_key(|journal| std::cmp::Reverse(journal.started_at));
+        Ok(records)
     }
 
     pub fn policy(&self) -> Result<AutoCleanupPolicy, StorageError> {
@@ -927,6 +1024,26 @@ impl CleanupStorage {
         #[cfg(test)]
         self.check_write_failure()?;
         write_json(&self.root.join("artifact-generations.json"), ledger, true)
+    }
+
+    /// Pure native recovery target derivation: never follow a journal-supplied path.
+    pub fn expected_quarantine_path(
+        &self,
+        execution_id: &str,
+        item_id: &str,
+    ) -> Result<PathBuf, StorageError> {
+        if !valid_id(execution_id) || !valid_id(item_id) {
+            return Err(StorageError::Invalid);
+        }
+        Ok(self
+            .root
+            .join("quarantine")
+            .join(execution_id)
+            .join(item_id))
+    }
+
+    pub(super) fn native_root(&self) -> &Path {
+        &self.root
     }
 
     pub fn quarantine_directory(
@@ -1075,6 +1192,88 @@ mod tests {
     }
 
     #[test]
+    fn execution_traversal_is_lazy_bounded_and_keeps_record_guards() {
+        let root = temp();
+        let storage = CleanupStorage::open(root.clone()).unwrap();
+        let mut journal: ExecutionJournal =
+            serde_json::from_str(include_str!("fixtures/journal-v1-mutating.json")).unwrap();
+        for index in 0..=MAX_EXECUTION_PAGE {
+            journal.execution_id = format!("{index:032x}");
+            storage.write_execution(&journal).unwrap();
+        }
+        let first = storage.execution_ids_after(None).unwrap();
+        assert_eq!(first.len(), MAX_EXECUTION_PAGE);
+        let second = storage
+            .execution_ids_after(first.last().map(String::as_str))
+            .unwrap();
+        assert_eq!(second, vec![journal.execution_id.clone()]);
+        assert!(
+            storage
+                .execution_ids_after(second.last().map(String::as_str))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(storage.execution_page(None, 0).is_err());
+        assert!(
+            storage
+                .execution_page(None, MAX_EXECUTION_PAGE + 1)
+                .is_err()
+        );
+        assert!(storage.execution_page(Some((0, "../invalid")), 1).is_err());
+
+        let last = storage
+            .id_path("executions", &journal.execution_id)
+            .unwrap();
+        for (bytes, expected) in [
+            (b"{".to_vec(), StorageError::Invalid),
+            (
+                serde_json::to_vec(&ExecutionJournal {
+                    execution_id: "f".repeat(32),
+                    ..journal.clone()
+                })
+                .unwrap(),
+                StorageError::Invalid,
+            ),
+            (
+                serde_json::to_vec(&ExecutionJournal {
+                    items: vec![journal.items[0].clone(); MAX_ITEMS + 1],
+                    ..journal.clone()
+                })
+                .unwrap(),
+                StorageError::Invalid,
+            ),
+        ] {
+            fs::write(&last, bytes).unwrap();
+            let mut records = storage.execution_records();
+            for _ in 0..MAX_EXECUTION_PAGE {
+                records.next().unwrap().unwrap();
+            }
+            assert_eq!(records.next().unwrap().unwrap_err(), expected);
+            assert!(records.next().is_none());
+            assert!(storage.has_execution_for_plan(&"f".repeat(32)).is_err());
+            assert!(storage.execution_page(None, 1).is_err());
+        }
+        File::create(&last)
+            .unwrap()
+            .set_len(MAX_RECORD_BYTES + 1)
+            .unwrap();
+        assert_eq!(
+            storage
+                .execution_records()
+                .nth(MAX_EXECUTION_PAGE)
+                .unwrap()
+                .unwrap_err(),
+            StorageError::TooLarge
+        );
+        journal.items = vec![journal.items[0].clone(); MAX_ITEMS + 1];
+        assert_eq!(
+            storage.write_execution(&journal),
+            Err(StorageError::Invalid)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn policy_is_atomic_persistent_and_bounded() {
         let root = temp();
         let storage = CleanupStorage::open(root.clone()).unwrap();
@@ -1166,6 +1365,20 @@ mod tests {
             proof.scope = CandidateProofScope::Storage {
                 evidence: Box::new(evidence),
             };
+            if matches!(
+                plan.scope,
+                CleanupPlanScope::Storage {
+                    module: cleanup_core::storage::StorageModule::EmptyFolders,
+                    ..
+                }
+            ) {
+                // Empty-only handle removal is permanent-only; never recycle a directory.
+                plan.disposition = CleanupDisposition::RecycleBin;
+                assert!(plan.validate().is_err());
+                plan.disposition = CleanupDisposition::Quarantine;
+                assert!(plan.validate().is_err());
+                plan.disposition = CleanupDisposition::Permanent;
+            }
             storage.create_plan(&plan).unwrap();
             let restored = storage.read_plan(&plan.plan_id).unwrap();
             assert_eq!(

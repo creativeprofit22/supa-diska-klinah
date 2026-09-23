@@ -35,6 +35,8 @@ pub struct ExtensionSummary {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DriveSummary {
     pub drive_id: String,
+    /// Native canonical drive letter (e.g. C:\), display only; never root authority.
+    pub display_mount: String,
     pub label: String,
     pub filesystem: String,
     pub total_bytes: u64,

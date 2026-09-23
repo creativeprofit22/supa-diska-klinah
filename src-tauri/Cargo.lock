@@ -4204,6 +4204,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "trash",
+ "windows 0.61.3",
  "windows-sys 0.61.2",
  "zeroize",
 ]

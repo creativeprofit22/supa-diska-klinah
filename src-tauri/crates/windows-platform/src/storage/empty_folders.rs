@@ -1,4 +1,5 @@
 //! Bottom-up empty-folder adapter. Mutation remains owned by CleanupService.
+use super::known_folders::{KnownFolder, KnownFolderResolver, NativeKnownFolders};
 use super::scans::ScanContext;
 use cleanup_core::{FileSystem, ProtectionPolicy, storage::*};
 
@@ -8,7 +9,8 @@ pub fn discover(
 ) -> Result<(), StorageError> {
     let root = context.root.clone().ok_or(StorageError::InvalidEvidence)?;
     let machine = super::protection::MachineRoots::resolve()?;
-    let mut folders = empty_folders::EmptyFolders::default();
+    let profile = NativeKnownFolders.resolve(KnownFolder::Profile)?;
+    let mut folders = empty_folders::EmptyFolders::new(Some(profile));
     context.phase(StoragePhase::Walking);
     context.walk(
         protection,
@@ -66,7 +68,12 @@ pub(crate) fn plan_proof(
 
 pub(crate) fn validate_current(evidence: &StorageEvidence) -> bool {
     let path = &evidence.entry().canonical_path;
-    super::protection::personal_path_allowed(&evidence.root().canonical_path)
+    // Fail closed when the profile cannot be resolved.
+    let Ok(profile) = NativeKnownFolders.resolve(KnownFolder::Profile) else {
+        return false;
+    };
+    !empty_folders::protected_folder(path, Some(&profile))
+        && super::protection::personal_path_allowed(&evidence.root().canonical_path)
         && super::protection::personal_path_allowed(path)
         && !empty_folders::blocks_visibility(&crate::WindowsFileSystem, path)
         && crate::WindowsFileSystem

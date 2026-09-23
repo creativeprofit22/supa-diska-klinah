@@ -49,8 +49,13 @@ pub enum FsErrorKind {
     PermissionDenied,
     InvalidData,
     Changed,
+    /// Another process holds the entry open without sharing (Windows sharing/lock violation).
+    InUse,
     Other,
 }
+
+/// Windows ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION.
+const WINDOWS_IN_USE_CODES: [i32; 2] = [32, 33];
 
 impl FsError {
     pub fn new(kind: FsErrorKind, message: impl Into<String>) -> Self {
@@ -69,12 +74,33 @@ impl std::error::Error for FsError {}
 impl From<std::io::Error> for FsError {
     fn from(error: std::io::Error) -> Self {
         let kind = match error.kind() {
+            _ if cfg!(windows)
+                && error
+                    .raw_os_error()
+                    .is_some_and(|code| WINDOWS_IN_USE_CODES.contains(&code)) =>
+            {
+                FsErrorKind::InUse
+            }
             std::io::ErrorKind::NotFound => FsErrorKind::NotFound,
             std::io::ErrorKind::PermissionDenied => FsErrorKind::PermissionDenied,
             std::io::ErrorKind::InvalidData => FsErrorKind::InvalidData,
             _ => FsErrorKind::Other,
         };
         Self::new(kind, error.to_string())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_error_tests {
+    use super::*;
+    #[test]
+    fn windows_errors_map_to_kudu_cleanup_reasons() {
+        let kind = |code| FsError::from(std::io::Error::from_raw_os_error(code)).kind;
+        assert_eq!(kind(2), FsErrorKind::NotFound); // ERROR_FILE_NOT_FOUND
+        assert_eq!(kind(3), FsErrorKind::NotFound); // ERROR_PATH_NOT_FOUND
+        assert_eq!(kind(5), FsErrorKind::PermissionDenied); // ERROR_ACCESS_DENIED
+        assert_eq!(kind(32), FsErrorKind::InUse); // ERROR_SHARING_VIOLATION
+        assert_eq!(kind(33), FsErrorKind::InUse); // ERROR_LOCK_VIOLATION
     }
 }
 

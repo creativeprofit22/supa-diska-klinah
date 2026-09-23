@@ -193,7 +193,9 @@ impl WalkState<'_, '_> {
                     .is_ok_and(|p| context.fs.semantics().equivalent(p, &entry.path))
                 {
                     Some(PartialReason::Changed)
-                } else if depth >= self.limits.depth {
+                } else if metadata.kind == EntryKind::Directory && depth >= self.limits.depth {
+                    // Depth bounds directory recursion, not files in the last
+                    // permitted directory (including root files at depth zero).
                     Some(PartialReason::DepthLimit)
                 } else {
                     None

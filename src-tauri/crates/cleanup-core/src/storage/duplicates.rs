@@ -28,6 +28,23 @@ pub fn digest_groups(files: Vec<(Copy, [u8; 32])>) -> Vec<([u8; 32], Vec<Copy>)>
     groups.into_iter().filter(|(_, g)| g.len() > 1).collect()
 }
 
+/// Rank confirmed groups by reclaimable bytes (size x redundant copies), largest first,
+/// matching Kudu. Retention limits then truncate the least valuable groups, not the
+/// largest ones. Ties keep digest order so publication stays deterministic.
+pub fn rank_by_reclaimable(groups: &mut [([u8; 32], Vec<Copy>)]) {
+    let reclaimable = |group: &[Copy]| {
+        group[0]
+            .1
+            .logical_bytes
+            .saturating_mul(group.len().saturating_sub(1) as u64)
+    };
+    groups.sort_by(|a, b| {
+        reclaimable(&b.1)
+            .cmp(&reclaimable(&a.1))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+}
+
 /// Rebind only explicitly selected rows to a remaining independent copy. Never
 /// expands the selection, including when the default keeper itself was selected.
 pub fn retain_copy(
@@ -149,6 +166,22 @@ mod tests {
         assert_eq!(full.len(), 1);
         assert_eq!(full[0].1.len(), 2);
         assert!(size_groups(vec![copy(1, 0), copy(1, 0)]).is_empty());
+    }
+    #[test]
+    fn confirmed_groups_rank_by_reclaimable_bytes_largest_first() {
+        let mut groups = vec![
+            ([1; 32], vec![copy(1, 10), copy(2, 10)]),
+            ([2; 32], vec![copy(3, 1_000), copy(4, 1_000)]),
+            (
+                [3; 32],
+                vec![copy(5, 400), copy(6, 400), copy(7, 400), copy(8, 400)],
+            ),
+            ([0; 32], vec![copy(9, 10), copy(10, 10)]),
+        ];
+        rank_by_reclaimable(&mut groups);
+        let order: Vec<_> = groups.iter().map(|(digest, _)| digest[0]).collect();
+        // 1_200 reclaimable (400 x 3) outranks 1_000 (1_000 x 1); ties keep digest order.
+        assert_eq!(order, vec![3, 2, 0, 1]);
     }
     #[test]
     fn duplicate_group_and_members_share_one_record_budget() {

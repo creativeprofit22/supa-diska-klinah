@@ -184,6 +184,66 @@ fn record_limit_preserves_partial_cleaner_results() {
 }
 
 #[test]
+fn scope_inventory_covers_every_exact_bound_root_without_truncation() {
+    let f = Fixture::new();
+    let scopes = scope_paths_with(&f);
+    assert!(scope_inventory_bound() <= 1024);
+    assert!(scopes.len() <= scope_inventory_bound());
+    let semantics = crate::WindowsFileSystem.semantics();
+    let mut roots = std::collections::BTreeSet::new();
+    for (_, path) in &scopes {
+        if let Some(path) = path {
+            assert!(roots.insert(semantics.key(path)));
+        }
+    }
+    for target in compiled_targets() {
+        if let Ok(bound) = bind(target, &f) {
+            assert!(
+                roots.contains(&semantics.key(&bound.root)),
+                "{}",
+                target.metadata.path
+            );
+        }
+    }
+    assert!(
+        scopes
+            .iter()
+            .any(|(label, path)| path.is_none() && label.contains(": "))
+    );
+    assert!(
+        roots.len() > 64,
+        "regression: four bare known folders do not cover targets"
+    );
+}
+
+#[test]
+fn sequential_disposable_scopes_keep_protected_descendants_out() {
+    let f = Arc::new(Fixture::new());
+    f.file("local/NVIDIA/DXCache/first", 90000);
+    let protected = f.file("local/NVIDIA/DXCache/private/keep", 90000);
+    f.file("local/NVIDIA/GLCache/second", 90000);
+    let p = f.protection(protected.parent());
+    assert_eq!(
+        scan(f.clone(), "local/NVIDIA/DXCache", p.clone())
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        scan(f.clone(), "local/NVIDIA/GLCache", p.clone())
+            .unwrap()
+            .len(),
+        1
+    );
+    // The bare local root is legitimate for some compiled wildcard targets.
+    // An unrelated existing subdirectory must not acquire catalog authority.
+    let unrelated = f.file("local/not-a-catalog-scope/keep", 90000);
+    assert!(scan(f.clone(), "local/not-a-catalog-scope", p).is_err());
+    assert!(unrelated.exists());
+    assert!(protected.exists());
+}
+
+#[test]
 fn pinned_catalog_provenance_and_excluded_inventory() {
     let c = catalog_inventory();
     let mut keys = std::collections::BTreeSet::new();

@@ -1,5 +1,13 @@
+pub(crate) mod browser;
 pub(crate) mod build_artifacts;
+pub(crate) mod cleaner;
 pub(crate) mod cleanup;
+pub(crate) mod disk_analyzer;
 pub(crate) mod drives;
+pub(crate) mod duplicates;
+pub(crate) mod empty_folders;
 pub(crate) mod foundation;
+pub(crate) mod large_files;
 pub(crate) mod security;
+pub(crate) mod storage;
+pub(crate) mod uninstaller;

@@ -4,7 +4,72 @@ use super::{
 };
 use crate::{EntryKind, FileSystem};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Kudu's protected folder names (Windows and generic lists). A folder with one of these
+/// names is never listed and never counts as empty, so its parent is not listed either.
+const PROTECTED_NAMES: &[&str] = &[
+    "windows",
+    "system32",
+    "syswow64",
+    "winsxs",
+    "program files",
+    "program files (x86)",
+    "programdata",
+    "recovery",
+    "boot",
+    "$recycle.bin",
+    "system volume information",
+    "perflogs",
+    "msocache",
+    "config.msi",
+    "drivers",
+    "inf",
+    "logs",
+    ".git",
+    ".svn",
+    ".hg",
+    "node_modules",
+    ".npm",
+    ".cache",
+    ".local",
+    "__pycache__",
+    ".venv",
+    ".env",
+    ".ssh",
+    ".gnupg",
+    ".config",
+    "appdata",
+    ".android",
+    ".gradle",
+];
+/// Kudu's user-profile folders, protected when they sit directly under the profile.
+const PROFILE_FOLDERS: &[&str] = &[
+    "desktop",
+    "documents",
+    "downloads",
+    "pictures",
+    "videos",
+    "music",
+    "onedrive",
+];
+
+/// True when an empty folder must never be offered for removal.
+pub fn protected_folder(path: &Path, profile: Option<&Path>) -> bool {
+    let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_lowercase()) else {
+        return true;
+    };
+    if PROTECTED_NAMES.contains(&name.as_str()) {
+        return true;
+    }
+    PROFILE_FOLDERS.contains(&name.as_str())
+        && profile.is_some_and(|profile| {
+            path.parent().is_some_and(|parent| {
+                crate::PathSemantics::CaseInsensitive.key(parent)
+                    == crate::PathSemantics::CaseInsensitive.key(profile)
+            })
+        })
+}
 
 /// Unknown attributes are not permission; apply this through the shared walker's exclusion gate.
 pub fn blocks_visibility(fs: &dyn FileSystem, path: &Path) -> bool {
@@ -25,8 +90,16 @@ struct Directory {
 pub struct EmptyFolders {
     stack: Vec<Directory>,
     rows: Vec<(EmptyFolderRecord, StorageEvidence)>,
+    profile: Option<PathBuf>,
 }
 impl EmptyFolders {
+    /// `profile` is the current user's profile folder, used to protect Desktop, Downloads, etc.
+    pub fn new(profile: Option<PathBuf>) -> Self {
+        Self {
+            profile,
+            ..Self::default()
+        }
+    }
     pub fn observe(&mut self, root: &RootAuthorization, event: WalkEvent<'_>) -> WalkControl {
         match event {
             WalkEvent::Entry {
@@ -88,7 +161,9 @@ impl EmptyFolders {
                 if directory.entry.canonical_path != path {
                     return WalkControl::Stop;
                 }
-                let empty = directory.empty && completeness.is_complete();
+                let empty = directory.empty
+                    && completeness.is_complete()
+                    && !protected_folder(path, self.profile.as_deref());
                 if let Some(parent) = self.stack.last_mut() {
                     parent.empty &= empty;
                     parent.descendants += 1 + directory.descendants;

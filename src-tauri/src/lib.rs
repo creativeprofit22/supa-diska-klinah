@@ -21,6 +21,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
             app.manage(Arc::clone(&cleanup_service));
             app.manage(Arc::new(commands::drives::DriveInventoryState::default()));
+            app.manage(Arc::new(
+                windows_platform::storage::scans::StorageService::new(),
+            ));
+            app.manage(Arc::new(
+                windows_platform::storage::root_picker::ScopeService::default(),
+            ));
             let maintenance_service = Arc::clone(&cleanup_service);
             tauri::async_runtime::spawn_blocking(move || {
                 let _ = maintenance_service.run_maintenance();
@@ -73,6 +79,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::build_artifacts::set_artifact_budget_policy,
             commands::build_artifacts::preview_artifact_budgets,
             commands::drives::list_drive_inventory,
+            commands::disk_analyzer::start_disk_analyzer,
+            commands::large_files::start_large_files,
+            commands::duplicates::start_duplicates,
+            commands::empty_folders::start_empty_folders,
+            commands::cleaner::list_cleaner_catalog,
+            commands::cleaner::start_cleaner,
+            commands::browser::list_browser_policy,
+            commands::browser::start_browser_scan,
+            commands::uninstaller::start_program_inventory,
+            commands::uninstaller::prepare_vendor_job,
+            commands::uninstaller::confirm_vendor_job,
+            commands::uninstaller::vendor_job_status,
+            commands::uninstaller::cancel_vendor_job,
+            commands::uninstaller::release_vendor_job,
+            commands::uninstaller::vendor_job_history,
+            commands::storage::choose_storage_root,
+            commands::storage::list_storage_scopes,
+            commands::storage::authorize_storage_scope,
+            commands::storage::storage_scan_status,
+            commands::storage::storage_scan_page,
+            commands::storage::cancel_storage_scan,
+            commands::storage::release_storage_scan,
+            commands::storage::create_storage_plan,
             commands::foundation::foundation_status,
             commands::security::create_system_restore_point
         ])

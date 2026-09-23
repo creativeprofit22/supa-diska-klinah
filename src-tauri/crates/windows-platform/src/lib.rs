@@ -2,6 +2,7 @@
 compile_error!("windows-platform supports Windows targets only");
 
 pub mod cleanup;
+pub mod history;
 pub mod privilege;
 pub mod security;
 mod startup;

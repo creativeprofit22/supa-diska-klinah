@@ -2228,7 +2228,13 @@ mod tests {
         assert!(root.join("target/release/output.bin").exists());
 
         let service = super::super::execution::CleanupService::new(root.join("app-data")).unwrap();
-        assert!(service.history().unwrap().is_empty());
+        assert!(
+            service
+                .history_page(crate::history::HistoryRequest::default())
+                .unwrap()
+                .records
+                .is_empty()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2265,8 +2271,9 @@ mod tests {
 
         let service = super::super::execution::CleanupService::new(root.join("app-data")).unwrap();
         let execution = service
-            .history()
+            .history_page(crate::history::HistoryRequest::default())
             .unwrap()
+            .records
             .into_iter()
             .find(|entry| {
                 entry.disposition == super::super::storage::CleanupDisposition::Quarantine
@@ -2363,8 +2370,9 @@ mod tests {
 
         let service = super::super::execution::CleanupService::new(root.join("app-data")).unwrap();
         let execution = service
-            .history()
+            .history_page(crate::history::HistoryRequest::default())
             .unwrap()
+            .records
             .into_iter()
             .find(|entry| {
                 entry
@@ -2610,7 +2618,10 @@ mod tests {
         let protected = fixture.root.join("target/debug");
         let quarantine = fixture.journal.items[0].quarantine_path.as_ref().unwrap();
         let service = super::super::execution::CleanupService::new(app_data.clone()).unwrap();
-        let history = service.history().unwrap();
+        let history = service
+            .history_page(crate::history::HistoryRequest::default())
+            .unwrap()
+            .records;
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].execution_id, fixture.journal.execution_id);
         assert_eq!(history[0].items[0].state, ItemState::Quarantined);
