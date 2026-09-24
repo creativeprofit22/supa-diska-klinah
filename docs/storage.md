@@ -53,6 +53,8 @@ Traversal depth counts nested directories, starting with the chosen folder at ze
 
 **Delete permanently** cannot be undone. It opens a separate native Windows confirmation with the native-resolved plan, count, bytes and path preview. No is the default. The engine revalidates after confirmation. Empty-folder removal uses this mode because moving a directory after an emptiness check could capture a newly created child.
 
+Protection quarantine is a separate store from storage recovery: it holds files a Protection scan flagged, in a scrambled form, and has its own restore and delete actions. See [protection](protection.md).
+
 The original temporary-cache Cleanup page has its own existing dispositions. Do not assume every legacy disposition is supported by every storage module.
 
 ## Installed programs are different

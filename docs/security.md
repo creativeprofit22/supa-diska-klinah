@@ -41,6 +41,20 @@ The optional pinned-source verification tool reads only fixed-revision JSON from
 
 No new elevated-helper operation or journal schema was added. Native scopes, plan summaries and displayed paths are not permission to bypass identity, browser-activity, duplicate-keeper or protected-root checks. Same-volume limits and unverified native/manual evidence are recorded in [storage verification](verification/storage-parity.md); this document is not a security certification.
 
+## Protection boundaries
+
+[ADR 0003](adr/0003-local-first-protection.md) and [protection](protection.md) define local-first protection. Its security properties:
+
+- **Rule authenticity.** Packs are verified with Ed25519 over their exact bytes before parsing, against a compiled-in public key, with a bounded schema that rejects unknown fields. A monotonic sequence refuses downgrades; only the retained previous pack can be restored, behind native confirmation. Release builds refuse external packs while only the test key exists.
+- **Rule-store recovery.** Install stages, flushes, renames and then atomically replaces a pointer. Startup removes staging leftovers and falls back to the previous pack, then to the embedded signed baseline. Reparse points inside the store are never followed.
+- **Trust by signer.** Trust comes from offline Authenticode (no revocation or network retrieval), never from folder names. A valid signature can lower a heuristic's severity but never hides a signed-rule match.
+- **Read-only processes.** The process inventory requests only limited query rights and never terminates, suspends or reads the memory of another process.
+- **Quarantine containment.** Storage paths derive from 32-hex IDs; records are validated and never supply paths. Sources must sit under the scanned root, have no reparse ancestors, avoid protected paths and still match their scanned hash. The source is deleted through the same handle that was hashed. Payloads are neutered. Restore is hash-checked and create-new, so it never overwrites.
+- **Network opt-in.** One WinHTTP sink with fixed hosts, HTTPS only, no redirects, cookies or automatic authentication, and bounded time and size. Each request needs a capability minted from its own opt-in flag. The breach check sends only a 5-character hash prefix. The webview CSP stays IPC-only.
+- **Command surface.** Protection commands take bounded JSON objects with fixed enums, booleans or opaque IDs. Folders come from native pickers.
+
+Residual risks: detection is only as good as the imported rules; AMSI providers may use their own cloud; a compromised process at the same integrity level can use the same confirmed commands; a leaked rule-signing key requires shipping a new app build.
+
 ## Attacker model and assumptions
 
 Untrusted inputs include webview content, the explicit project-root add path, persisted app registries and plans, command payloads, helper arguments, loopback peers, framed JSON, local filesystem entries, repository content, and build environment variables. The design assumes same-user processes may race or guess ports, local web content may be compromised, Windows UAC behaves correctly, the installed directory is protected from standard users, and no administrator compromise already exists.

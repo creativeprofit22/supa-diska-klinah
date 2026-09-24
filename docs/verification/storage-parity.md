@@ -555,6 +555,28 @@ Final gates after acceptance, on fnm Node 24.19.0 / pnpm 11.22.0:
   after formatting `restore_point.rs` and `journal_store.rs` (executions `00a8c384…`, `242f858d…`,
   `f321c14d…`).
 
+## Protection automated evidence: 2026-09-23 UTC
+
+Phase: diagnostics and protection parity ([ADR 0003](../adr/0003-local-first-protection.md)). The full record is
+[protection verification](protection.md). Harness evidence blockers, kept separate from runtime guidance:
+
+- `cargo test --workspace --locked` (execution `56ace6fc-b617-4a19-8239-a29c1aa800d9`): 431 passed, 4 failed.
+  All 4 failures are the timing-sensitive real-cargo `cleanup::build_artifacts::tests::real_*` tests
+  described above; `src/cleanup/` is unchanged. A single-threaded re-run also timed out under load
+  (execution `210588eb-1fc7-4cc6-aa05-021d13054bf4`). Protection tests pass (execution `469139a2-63c8-407f-84ec-02505a6b6326`).
+- `pnpm test` (execution `11ae07a3-7ac2-48c4-931c-b9b818b21dc3`) exited 1 because two Vitest workers timed out
+  while starting. Every executed test passed, and both files pass alone (execution `02729899-cb88-47f3-9e04-6b410e26a3ed`).
+- rustc crashed reading the incremental cache (`on_disk_cache.rs:519`), and linking hit LNK1207. Runs used
+  `CARGO_INCREMENTAL=0`. **Resolved 2026-09-24:** with the owner's approval, the `windows_platform-*` and
+  `supa_diska_klinah-*` folders under `target/debug/incremental` were deleted (execution
+  `ce998b8f-0efe-485e-906c-3dbdf37bfa61`). A normal incremental rebuild then compiled without the crash, and the
+  protection tests passed (execution `0c471b78-c70f-4362-98d7-249eb6623841`). This clears only the cache blocker;
+  the 4 `real_*` build-artifact timeouts above stay **open**.
+- `pnpm check` (execution `2f81df6b-e58e-4057-8e0c-723d56429c70`) and clippy with `-D warnings` (execution
+  `313c97bf-a6f1-40ff-86af-11d1ac21e1b8`) passed.
+
+Manual Windows acceptance for protection was **accepted by the owner on 2026-09-24** (see [protection verification](protection.md)). The 4 build-artifact timeouts and the Vitest start-up timeouts remain open harness blockers; storage manual step 8 is unaffected.
+
 ## Completion remains gated
 
 **2026-09-23: the project owner waived Narrator verification for this phase.** The app is for
