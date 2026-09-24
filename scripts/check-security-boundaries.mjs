@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -259,6 +260,61 @@ if (
   /smokeAdapter/.test(policyWriteAdapter)
  ) {
   fail("native smoke may simulate read/run states but never registration or policy mutation");
+}
+
+// ADR 0003: protection commands take opaque IDs and fixed enums only; paths come
+// from native pickers; destructive actions pass a native confirmation first.
+const protectionCommands = read("src-tauri/src/commands/protection.rs");
+const protectionNet = read("src-tauri/crates/windows-platform/src/protection/net.rs");
+const protectionInputs = [...protectionCommands.matchAll(/struct (\w+Input) \{([^}]*)\}/g)];
+const confirmedBefore = (name, action) => {
+  const body = protectionCommands.slice(protectionCommands.indexOf(`fn ${name}`));
+  const confirm = body.indexOf("native_ui::confirm");
+  return confirm >= 0 && confirm < body.indexOf(action);
+};
+if (
+  protectionInputs.length < 4 ||
+  protectionInputs.some(([, , body]) => /\b(?:PathBuf|OsString|path|url|host|folder)\b/i.test(body)) ||
+  (protectionCommands.match(/deny_unknown_fields/g) ?? []).length !== protectionInputs.length ||
+  /derive\([^)]*Debug[^)]*\)\]\s*#\[serde[^\]]*\]\s*struct PasswordInput/.test(protectionCommands) ||
+  !confirmedBefore("quarantine_protection_finding", "service.quarantine_finding") ||
+  !confirmedBefore("restore_quarantined", "service.restore") ||
+  !confirmedBefore("delete_quarantined", "service.delete") ||
+  !confirmedBefore("restore_previous_rule_pack", "service.restore_previous_rules") ||
+  !/WINHTTP_OPTION_REDIRECT_POLICY_NEVER/.test(protectionNet) ||
+  !/WINHTTP_FLAG_SECURE\b/.test(protectionNet) ||
+  !/capability\.purpose\(\) != endpoint\.purpose\(\)/.test(protectionNet)
+) {
+  fail("protection commands or network sink drifted from ADR 0003");
+}
+
+// Rule-pack signing keys: the committed test key is the only private key the
+// repository may hold. Scan tracked files plus untracked, non-ignored files so
+// a key is caught before it is committed.
+const testPrivateKey = "src-tauri/crates/windows-platform/src/protection/fixtures/test-rule-pack.pem";
+const privateKeyMarkers = ["", "ENCRYPTED "].map((kind) =>
+  Buffer.from(`-----BEGIN ${kind}PRIVATE ` + "KEY-----"),
+);
+const candidateFiles = execFileSync(
+  "git",
+  ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+  { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+)
+  .split("\0")
+  .filter(Boolean)
+  .sort();
+for (const file of candidateFiles) {
+  if (file === testPrivateKey) continue;
+  if (/\.(?:pem|key)$/i.test(file)) fail(`private key file may not be committed: ${file}`);
+  const path = resolve(root, file);
+  if (!existsSync(path)) continue;
+  const bytes = readFileSync(path);
+  if (privateKeyMarkers.some((marker) => bytes.includes(marker))) {
+    fail(`private key material may not be committed: ${file}`);
+  }
+}
+if (!/^[0-9a-f]{64}\n?$/.test(read("src-tauri/keys/rule-pack.pub"))) {
+  fail("rule-pack public key must be exactly 64 lowercase hex characters");
 }
 
 console.log(focusMessages[focus]);

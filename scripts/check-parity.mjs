@@ -108,6 +108,23 @@ for (const row of storageRows) {
     fail(`unimplemented storage capability cannot be verified: ${row[0]}`);
   }
 }
+// ADR 0003 protection rows: every row cites real Rust fixtures and stays
+// unverified until manual Windows acceptance is recorded.
+const protectionRows = rowsAfter(
+  "| Protection feature | Pinned Kudu behavior | Supported behavior | Exclusions and adaptations | Required fixtures | Implementation status | Verification status |",
+);
+verifyInventory(protectionRows, [
+  "Process inspection", "Suspicious-file scan", "Quarantine", "Signature updates",
+  "Breach check", "Defender and AMSI", "Kudu cloud features",
+], "protection capability");
+for (const row of protectionRows) {
+  const references = [...row[4].matchAll(/`([^`]+)`/g)].map(match => match[1]);
+  if (!references.length) fail(`protection capability needs executable fixture references: ${row[0]}`);
+  references.forEach(requireActualFixture);
+  if (row[6] === "Verified" && !/\bAccepted\b/.test(readFileSync(resolve(projectRoot, "docs/verification/protection.md"), "utf8"))) {
+    fail(`protection capability cannot be verified before manual acceptance: ${row[0]}`);
+  }
+}
 // Implemented module rows must name targets that exist in the tree.
 function existsInProject(path) {
   try {

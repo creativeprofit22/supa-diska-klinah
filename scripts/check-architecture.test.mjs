@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve, sep } from "node:path";
 import test from "node:test";
@@ -87,6 +87,70 @@ test("architecture scanner boundaries", async (t) => {
         finally { rmSync(destination); }
       });
     }
+  }
+
+  // ADR 0003: the embedded WebView2 engine keeps its background networking off.
+  const configPath = resolve(sandbox, "src-tauri/tauri.conf.json");
+  const originalConfig = readFileSync(configPath, "utf8");
+  const withMainWindowArgs = (args) => {
+    const config = JSON.parse(originalConfig);
+    const main = config.app.windows.find((window) => window.label === "main");
+    if (args === undefined) delete main.additionalBrowserArgs;
+    else main.additionalBrowserArgs = args;
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+  };
+  const defaultEngineArgs = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+  for (const [name, args, missing] of [
+    ["background networking flag removed", `${defaultEngineArgs} --disable-component-update`, "--disable-background-networking"],
+    ["component update flag removed", `${defaultEngineArgs} --disable-background-networking`, "--disable-component-update"],
+    ["wry default flags dropped", "--disable-background-networking --disable-component-update", defaultEngineArgs],
+    ["flag weakened by a suffix", `${defaultEngineArgs} --disable-background-networking-x --disable-component-update`, "--disable-background-networking"],
+    ["browser args removed entirely", undefined, "--disable-background-networking"],
+  ]) {
+    await t.test(`rejects WebView2 args with ${name}`, () => {
+      withMainWindowArgs(args);
+      try {
+        const result = scan();
+        assert.equal(result.status, 1, result.stdout);
+        assert.ok(result.stderr.includes(`window "main" must set ${missing} in additionalBrowserArgs`), result.stderr);
+      } finally {
+        writeFileSync(configPath, originalConfig);
+      }
+    });
+  }
+  await t.test("accepts intact WebView2 args, including extra flags", () => {
+    withMainWindowArgs(`${defaultEngineArgs} --disable-background-networking --disable-component-update --lang=en-US`);
+    try {
+      const result = scan();
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Architecture boundaries verified\./);
+    } finally {
+      writeFileSync(configPath, originalConfig);
+    }
+  });
+
+  // ADR 0003: one network sink, read-only process inspection, IPC-only webview.
+  for (const [name, path, source, message] of [
+    ["WinHTTP outside net.rs", "src-tauri/crates/windows-platform/src/protection/net-copy.rs", "use windows::Win32::Networking::WinHttp::WinHttpOpen;", /uses a network API/],
+    ["WinINet in cleanup-core", "src-tauri/crates/cleanup-core/src/net-copy.rs", "fn InternetOpenW() {}", /uses a network API/],
+    ["raw socket", "src-tauri/crates/windows-platform/src/storage/socket-copy.rs", "use std::net::TcpStream;", /opens a socket/],
+    ["process termination in protection", "src-tauri/crates/windows-platform/src/protection/kill-copy.rs", "use windows_sys::Win32::System::Threading::TerminateProcess;", /read-only toward other processes/],
+    ["memory reads in protection", "src-tauri/crates/windows-platform/src/protection/vm-copy.rs", "const A: u32 = PROCESS_VM_READ;", /read-only toward other processes/],
+    ["webview fetch", "src/features/leak/leak.ts", "export const leak = () => fetch(\"https://example.com\");\n", /makes a network request from the webview/],
+    ["certification wording", "src/features/protection/Claim.tsx", "export const Claim = () => <p>Your PC is safe</p>;\n", /uses certification wording/],
+  ]) {
+    await t.test(`rejects ${name}`, () => {
+      const destination = resolve(sandbox, path);
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, source);
+      try {
+        const result = scan();
+        assert.equal(result.status, 1, result.stdout);
+        assert.match(result.stderr, message);
+      } finally {
+        rmSync(destination);
+      }
+    });
   }
 
   const importer = resolve(sandbox, "src/features/build-artifacts/profileValidation.test.ts");

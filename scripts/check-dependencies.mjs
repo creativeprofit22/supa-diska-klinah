@@ -40,6 +40,12 @@ if (!cleanupCoreCargo.includes('serde_json = "=1.0.151"')) {
   fail("cleanup-core serde_json must remain pinned to 1.0.151");
 }
 
+// ADR 0003: the rule-pack signature verifier is a pinned crypto dependency.
+const protectionCoreCargo = readFileSync("src-tauri/crates/protection-core/Cargo.toml", "utf8");
+for (const required of ['ed25519-dalek = { version = "=2.2.0"', 'aho-corasick = { version = "=1.1.5"', 'sha2 = "=0.10.9"']) {
+  if (!protectionCoreCargo.includes(required)) fail(`protection-core must pin ${required}`);
+}
+
 const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
 const actionLines = workflow.split(/\r?\n/).filter((line) => line.trim().startsWith("uses:"));
 if (
