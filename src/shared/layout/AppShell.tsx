@@ -43,6 +43,7 @@ export function AppShell() {
           <NavLink to="/restore-points">Restore points</NavLink>
           <NavLink to="/windows-update">Windows Update</NavLink>
           <NavLink to="/scheduled-scans">Scheduled scans</NavLink>
+          <NavLink to="/protection">Protection</NavLink>
           <NavLink to="/settings">Settings</NavLink>
         </nav>
       </aside>

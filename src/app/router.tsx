@@ -16,6 +16,7 @@ import { hostsRoute } from "../features/hosts/route";
 import { optimizerRoute } from "../features/optimizer/route";
 import { powerRoute } from "../features/power/route";
 import { privacyRoute } from "../features/privacy/route";
+import { protectionRoute } from "../features/protection/route";
 import { restoreRoute } from "../features/restore/route";
 import { schedulerRoute } from "../features/scheduler/route";
 import { servicesRoute } from "../features/services/route";
@@ -29,6 +30,6 @@ export const router = createHashRouter([
     element: <AppShell />,
     children: [dashboardRoute, drivesRoute, diskAnalyzerRoute, largeFilesRoute, duplicatesRoute, emptyFoldersRoute, cleanerRoute, browserRoute, uninstallerRoute, cleanupRoute,
       optimizerRoute, startupRoute, servicesRoute, privacyRoute, firewallRoute, hostsRoute, powerRoute, driversRoute, restoreRoute, updatesRoute, schedulerRoute,
-      settingsRoute],
+      protectionRoute, settingsRoute],
   },
 ]);
