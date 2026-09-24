@@ -73,7 +73,25 @@
     "allow-detect-windows-updates",
     "allow-list-scan-schedules",
     "allow-list-scheduled-scan-summaries",
-    "allow-get-optimizer-proposals"
+    "allow-get-optimizer-proposals",
+    "allow-protection-overview",
+    "allow-set-protection-network-policy",
+    "allow-list-running-programs",
+    "allow-start-protection-scan",
+    "allow-cancel-protection-scan",
+    "allow-protection-scan-status",
+    "allow-last-protection-scan",
+    "allow-quarantine-protection-finding",
+    "allow-list-quarantine",
+    "allow-restore-quarantined",
+    "allow-delete-quarantined",
+    "allow-allow-protection-finding",
+    "allow-clear-protection-allowlist",
+    "allow-import-rule-pack",
+    "allow-restore-previous-rule-pack",
+    "allow-download-rule-pack",
+    "allow-check-password-breach",
+    "allow-get-defender-history"
   ],
   "platforms": ["windows"]
 }

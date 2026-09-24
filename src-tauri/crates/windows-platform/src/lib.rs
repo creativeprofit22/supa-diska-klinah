@@ -11,6 +11,7 @@ pub mod os_info;
 pub mod power;
 pub mod privacy;
 pub mod privilege;
+pub mod protection;
 pub mod restore;
 pub mod scheduler;
 pub mod security;

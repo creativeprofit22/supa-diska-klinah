@@ -14,6 +14,7 @@ pub(crate) mod large_files;
 pub(crate) mod optimizer;
 pub(crate) mod power;
 pub(crate) mod privacy;
+pub(crate) mod protection;
 pub(crate) mod restore;
 pub(crate) mod scheduler;
 pub(crate) mod security;

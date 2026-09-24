@@ -33,7 +33,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(|_| std::io::Error::other("system change journal unavailable"))?,
             ));
             let cleanup_service = Arc::new(
-                CleanupService::new(app_data)
+                CleanupService::new(app_data.clone())
                     .map_err(|_| std::io::Error::other("cleanup service initialization failed"))?,
             );
             app.manage(Arc::clone(&cleanup_service));
@@ -43,6 +43,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ));
             app.manage(Arc::new(
                 windows_platform::storage::root_picker::ScopeService::default(),
+            ));
+            // Opening the protection service runs rule-store and quarantine recovery.
+            app.manage(Arc::new(
+                windows_platform::protection::service::ProtectionService::new(&app_data)
+                    .map_err(|_| std::io::Error::other("protection storage unavailable"))?,
             ));
             let maintenance_service = Arc::clone(&cleanup_service);
             tauri::async_runtime::spawn_blocking(move || {
@@ -140,7 +145,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::updates::detect_windows_updates,
             commands::scheduler::list_scan_schedules,
             commands::scheduler::list_scheduled_scan_summaries,
-            commands::optimizer::get_optimizer_proposals
+            commands::optimizer::get_optimizer_proposals,
+            commands::protection::protection_overview,
+            commands::protection::set_protection_network_policy,
+            commands::protection::list_running_programs,
+            commands::protection::start_protection_scan,
+            commands::protection::cancel_protection_scan,
+            commands::protection::protection_scan_status,
+            commands::protection::last_protection_scan,
+            commands::protection::quarantine_protection_finding,
+            commands::protection::list_quarantine,
+            commands::protection::restore_quarantined,
+            commands::protection::delete_quarantined,
+            commands::protection::allow_protection_finding,
+            commands::protection::clear_protection_allowlist,
+            commands::protection::import_rule_pack,
+            commands::protection::restore_previous_rule_pack,
+            commands::protection::download_rule_pack,
+            commands::protection::check_password_breach,
+            commands::protection::get_defender_history
         ])
         .run(context)?;
     Ok(())

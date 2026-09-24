@@ -20,7 +20,8 @@
         "visible": false,
         "focus": false,
         "minWidth": 720,
-        "minHeight": 480
+        "minHeight": 480,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-networking --disable-component-update"
       }
     ],
     "security": {

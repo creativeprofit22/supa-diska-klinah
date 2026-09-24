@@ -7,6 +7,7 @@ license = "MIT"
 
 [dependencies]
 cleanup-core = { path = "../cleanup-core" }
+protection-core = { path = "../protection-core" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 trash = "=5.2.6"
@@ -16,6 +17,7 @@ zeroize = "=1.9.0"
 windows = { version = "=0.61.3", default-features = false, features = [
   "Win32_Foundation",
   "Win32_NetworkManagement_WindowsFirewall",
+  "Win32_Networking_WinHttp",
   "Win32_System_Com",
   "Win32_System_Ole",
   "Win32_System_TaskScheduler",
@@ -31,7 +33,12 @@ windows-sys = { version = "=0.61.2", features = [
   "Win32_Foundation",
   "Win32_Security",
   "Win32_Security_Authorization",
+  "Win32_Security_Cryptography",
+  "Win32_Security_Cryptography_Catalog",
+  "Win32_Security_Cryptography_Sip",
+  "Win32_Security_WinTrust",
   "Win32_Storage_FileSystem",
+  "Win32_System_Antimalware",
   "Win32_System_Com",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_JobObjects",
@@ -48,3 +55,4 @@ windows-sys = { version = "=0.61.2", features = [
 
 [dev-dependencies]
 junction = "=2.0.0"
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std"] }

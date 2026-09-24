@@ -179,7 +179,16 @@ fn selected(
         .transpose()
 }
 fn pick_folder(owner: isize) -> Result<Option<PathBuf>, JobError> {
-    fn show(owner: isize) -> windows::core::Result<Option<PathBuf>> {
+    pick_folder_titled(owner, w!("Choose storage scan folder"))
+}
+
+/// Native folder picker shared with the protection scanner. Run on a dedicated
+/// blocking thread; `owner` must come from the application's own window.
+pub(crate) fn pick_folder_titled(
+    owner: isize,
+    title: windows::core::PCWSTR,
+) -> Result<Option<PathBuf>, JobError> {
+    fn show(owner: isize, title: windows::core::PCWSTR) -> windows::core::Result<Option<PathBuf>> {
         // SAFETY: COM is initialized and balanced on this thread; all interfaces
         // drop before the apartment. The owner is supplied by the native app.
         unsafe {
@@ -204,7 +213,7 @@ fn pick_folder(owner: isize) -> Result<Option<PathBuf>, JobError> {
                     | FOS_NOCHANGEDIR
                     | FOS_DONTADDTORECENT,
             )?;
-            dialog.SetTitle(w!("Choose storage scan folder"))?;
+            dialog.SetTitle(title)?;
             if let Err(error) = dialog.Show(Some(HWND(owner as *mut _))) {
                 if error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) {
                     return Ok(None);
@@ -219,7 +228,7 @@ fn pick_folder(owner: isize) -> Result<Option<PathBuf>, JobError> {
             Ok(Some(PathBuf::from(text?)))
         }
     }
-    show(owner).map_err(|_| JobError::Native("folder_picker_unavailable".into()))
+    show(owner, title).map_err(|_| JobError::Native("folder_picker_unavailable".into()))
 }
 
 #[cfg(test)]
