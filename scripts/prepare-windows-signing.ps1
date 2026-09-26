@@ -1,8 +1,21 @@
+# Imports the code-signing certificate for an Authenticode release. Runs only
+# when the repository's signing mode is `authenticode`; unsigned releases use
+# the plain tauri.conf.json and never touch certificate secrets.
 param(
-  [string]$ConfigPath
+  [string]$ConfigPath,
+  [Parameter(Mandatory = $true)]
+  [ValidateSet("unsigned", "authenticode")]
+  [string]$SigningMode,
+  [string]$ExpectedThumbprint
 )
 
 $ErrorActionPreference = "Stop"
+if ($SigningMode -ne "authenticode") {
+  throw "Code signing is only prepared in authenticode mode (current mode: $SigningMode)."
+}
+if ($ExpectedThumbprint -notmatch '^[0-9A-F]{40}$') {
+  throw "Authenticode mode needs the expected product certificate thumbprint (40 uppercase hex characters)."
+}
 $tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
 if (-not $ConfigPath) {
   $ConfigPath = Join-Path $tempRoot "tauri.release.conf.json"
@@ -26,6 +39,9 @@ try {
   }
   if (-not ($certificate.EnhancedKeyUsageList.ObjectId.Value -contains "1.3.6.1.5.5.7.3.3")) {
     throw "The imported certificate is not valid for code signing."
+  }
+  if ($certificate.Thumbprint -ne $ExpectedThumbprint) {
+    throw "The provided certificate ($($certificate.Thumbprint)) is not the expected product certificate ($ExpectedThumbprint)."
   }
 
   @{ bundle = @{ windows = @{ certificateThumbprint = $certificate.Thumbprint } } } |

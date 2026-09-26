@@ -22,6 +22,13 @@ Use one identifiable x64 candidate for every check.
 - [x] Hardened helper, frontend, Rust, security-boundary, and x64 smoke checks pass.
 - [x] The main app starts at standard integrity with its adjacent helper present.
 
+## Signing mode
+
+The release pipeline runs in the mode declared in [release](release.md) (`Current signing mode: unsigned`).
+
+- **Unsigned path (current):** `verify-windows-release.ps1 -SigningMode unsigned` requires the installer, app and helper to be `NotSigned`; release notes carry the unsigned notice and verification steps. Evidence for the current candidate is in [release verification](verification/release.md).
+- **Signed path — pending certificate:** `-SigningMode authenticode` with the expected thumbprint and subject, plus a timestamp. Not yet run; follow [Turning on code signing](release.md#turning-on-code-signing) first.
+
 ## Successful restore-point run
 
 Run locally with System Protection enabled. Record observations, not expectations.
