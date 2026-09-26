@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { ArtifactBudgetSettings } from "../build-artifacts/ArtifactBudgetSettings";
 import { useSettingsState } from "./model/useSettingsState";
+import { ScanSpeedSettings } from "./ScanSpeedSettings";
 
 export function SettingsPage() {
   const {
@@ -96,6 +97,7 @@ export function SettingsPage() {
           </form>
         )}
       </div>
+      <ScanSpeedSettings />
       <ArtifactBudgetSettings />
     </section>
   );

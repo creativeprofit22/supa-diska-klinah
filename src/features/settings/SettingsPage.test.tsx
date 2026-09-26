@@ -8,6 +8,10 @@ vi.mock("../build-artifacts/ArtifactBudgetSettings", () => ({
   ArtifactBudgetSettings: () => <div>Artifact budget settings</div>,
 }));
 
+vi.mock("./ScanSpeedSettings", () => ({
+  ScanSpeedSettings: () => <div>Scan speed settings</div>,
+}));
+
 const { getAutoCleanupPolicy, setAutoCleanupPolicy } = vi.hoisted(() => ({
   getAutoCleanupPolicy: vi.fn(),
   setAutoCleanupPolicy: vi.fn(),
