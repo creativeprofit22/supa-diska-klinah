@@ -1,4 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
+import {
+  privacyFailures,
+  readmeStatusFailures,
+  RELEASE_DOCS,
+  releaseDocFailures,
+  signingModeFailures,
+  UNSIGNED_NOTICES,
+  versionFailures,
+} from "./release-doc-rules.mjs";
 
 const requiredDocuments = [
   "docs/architecture.md",
@@ -101,4 +110,28 @@ for (const heading of [
     process.exit(1);
   }
 }
-console.log("Threat model, privilege inventory, recovery, storage evidence, performance, and README links verified.");
+// Documentation as a release gate: required release docs, current README status,
+// one version everywhere, every network endpoint disclosed, and signing-mode notices
+// matching the committed mode.
+{
+  const optional = (path) => (existsSync(path) ? readFileSync(path, "utf8") : undefined);
+  const docs = Object.fromEntries(
+    [...new Set([...Object.keys(RELEASE_DOCS), ...Object.keys(UNSIGNED_NOTICES)])].map((path) => [path, optional(path)]),
+  );
+  const releaseFailures = [
+    ...releaseDocFailures(readme, docs),
+    ...readmeStatusFailures(readme),
+    ...versionFailures({
+      packageJson: readFileSync("package.json", "utf8"),
+      tauriConf: readFileSync("src-tauri/tauri.conf.json", "utf8"),
+      cargoToml: readFileSync("src-tauri/Cargo.toml", "utf8"),
+    }),
+    ...privacyFailures(docs["docs/privacy.md"] ?? "", readFileSync("src-tauri/crates/windows-platform/src/protection/net.rs", "utf8")),
+    ...signingModeFailures(docs["docs/release.md"] ?? "", docs),
+  ];
+  if (releaseFailures.length) {
+    console.error(`Documentation check failed:\n  ${releaseFailures.join("\n  ")}`);
+    process.exit(1);
+  }
+}
+console.log("Threat model, privilege inventory, recovery, storage evidence, performance, release docs, signing-mode notices, and README links verified.");

@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { hygieneFailures } from "./workflow-rules.mjs";
 
 function fail(message) {
   console.error(`Dependency check failed: ${message}`);
@@ -59,6 +60,9 @@ for (const name of workflowFiles) {
   ) {
     fail(`every GitHub Action in ${name} must use a full immutable commit SHA`);
   }
+  // Least privilege per job and no credentials left on disk after checkout.
+  const failures = hygieneFailures(name, workflow);
+  if (failures.length > 0) fail(failures.join("\n"));
 }
 
 for (const lockfile of ["pnpm-lock.yaml", "src-tauri/Cargo.lock"]) {

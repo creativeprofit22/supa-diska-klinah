@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { releaseFailures } from "./workflow-rules.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const read = (path) => readFileSync(resolve(root, path), "utf8");
@@ -112,6 +113,44 @@ if (
 ) {
   fail("production bundles must be timestamped per-machine NSIS installers with external signing");
 }
+if (
+  JSON.stringify(tauriConfig.bundle.windows?.nsis?.languages) !== JSON.stringify(["English", "Spanish"]) ||
+  tauriConfig.bundle.windows?.nsis?.displayLanguageSelector !== false
+) {
+  fail("the installer must ship English and Spanish and follow the Windows display language without a selector");
+}
+// Installer hooks run elevated inside the per-machine uninstaller. Only the
+// reviewed pre-uninstall task cleanup is allowed, it is skipped on updates, and it
+// invokes exactly the bundled helper's argument-only verb.
+if (tauriConfig.bundle.windows?.nsis?.installerHooks !== "windows/installer-hooks.nsh") {
+  fail("NSIS installer hooks must be windows/installer-hooks.nsh");
+}
+{
+  const hooks = read("src-tauri/windows/installer-hooks.nsh")
+    .split(/\r?\n/)
+    .filter((line) => line.trim() && !line.trim().startsWith(";"))
+    .map((line) => line.trim());
+  const expected = [
+    "!macro NSIS_HOOK_PREUNINSTALL",
+    "${If} $UpdateMode <> 1",
+    '${If} ${FileExists} "$INSTDIR\\supa-diska-klinah-privileged-helper.exe"',
+    "ExecWait '\"$INSTDIR\\supa-diska-klinah-privileged-helper.exe\" --remove-scheduled-tasks'",
+    "${EndIf}",
+    "${EndIf}",
+    "!macroend",
+  ];
+  if (JSON.stringify(hooks) !== JSON.stringify(expected)) {
+    fail("installer hooks differ from the reviewed pre-uninstall scheduled-task cleanup");
+  }
+}
+const helperMain = read("src-tauri/crates/privileged-helper/src/main.rs");
+if (
+  !/const REMOVE_SCHEDULED_TASKS: &str = "--remove-scheduled-tasks";/.test(helperMain) ||
+  !/if args\.next\(\)\.is_some\(\) \{\s*2/.test(helperMain) ||
+  !/ComTaskService\.remove_all_for_uninstall\(\)/.test(helperMain)
+) {
+  fail("the helper's uninstall verb must take no extra arguments and only remove the app's scheduled tasks");
+}
 
 if (!/requestedExecutionLevel\s+level="asInvoker"\s+uiAccess="false"/.test(appManifest)) {
   fail("main manifest must explicitly request asInvoker");
@@ -152,14 +191,13 @@ if (
 if (cargoFiles.some((cargo) => /tauri-plugin-(?:shell|fs)/.test(cargo))) {
   fail("generic shell and filesystem plugins are forbidden");
 }
-const releaseJob = ciWorkflow.slice(ciWorkflow.indexOf("  windows-release:"));
+const releaseRuleFailures = releaseFailures(ciWorkflow, { verify: releaseVerification, prepare: releaseSigning });
+if (releaseRuleFailures.length > 0) fail(releaseRuleFailures.join("\n"));
+const releaseJob = ciWorkflow.slice(ciWorkflow.indexOf("  windows-release-build:"));
 if (
-  !/environment: windows-release/.test(releaseJob) ||
   !/secrets\.WINDOWS_CODESIGN_PFX_BASE64/.test(releaseJob) ||
   !/secrets\.WINDOWS_CODESIGN_PFX_PASSWORD/.test(releaseJob) ||
   !/tauri build --ci --target x86_64-pc-windows-msvc --bundles nsis/.test(releaseJob) ||
-  /--debug|--no-bundle/.test(releaseJob) ||
-  !/verify-windows-release\.ps1/.test(releaseJob) ||
   !/Import-PfxCertificate/.test(releaseSigning) ||
   !/Get-AuthenticodeSignature/.test(releaseVerification) ||
   !/Get-Acl/.test(releaseVerification) ||
@@ -315,6 +353,15 @@ for (const file of candidateFiles) {
 }
 if (!/^[0-9a-f]{64}\n?$/.test(read("src-tauri/keys/rule-pack.pub"))) {
   fail("rule-pack public key must be exactly 64 lowercase hex characters");
+}
+// The update key is separate from the rule-pack key. Until a release key is
+// generated it holds the `unconfigured` marker, which disables updates.
+const updateKey = read("src-tauri/keys/update.pub");
+if (!/^(?:[0-9a-f]{64}|unconfigured)\n?$/.test(updateKey)) {
+  fail("update public key must be 64 lowercase hex characters or the `unconfigured` marker");
+}
+if (updateKey.trim() === read("src-tauri/keys/rule-pack.pub").trim()) {
+  fail("the update key must differ from the rule-pack key");
 }
 
 console.log(focusMessages[focus]);

@@ -110,6 +110,8 @@ const approvedProcessOwner = resolve(
 );
 const approvedVendorOwner = resolve(root, "src-tauri/crates/windows-platform/src/storage/vendor_uninstall.rs");
 const approvedBrokerOwner = resolve(root, "src-tauri/crates/windows-platform/src/security/broker.rs");
+// The verified self-update installer is opened (never elevated) from this one file.
+const approvedUpdateLaunchOwner = resolve(root, "src-tauri/crates/windows-platform/src/self_update/launch.rs");
 // ADR 0002: the only system-management process launch is the helper-side
 // `<System32>\powercfg.exe /hibernate on|off` with fixed argv.
 const approvedPowercfgOwner = resolve(root, "src-tauri/crates/windows-platform/src/power/elevated.rs");
@@ -185,7 +187,7 @@ for (const directory of rustRoots) {
     }
     // Detect imported/aliased APIs too, not just call expressions. Fixture paths get no native exception.
     if (/\b(?:CreateProcess(?:AsUser|WithLogon|WithToken)?[AW]?|ShellExecute(?:Ex)?[AW]?|WinExec|NtCreateUserProcess|RtlCreateUserProcess)\b/.test(source) &&
-        ![approvedVendorOwner, approvedBrokerOwner, approvedProcessOwner].includes(resolve(file))) {
+        ![approvedVendorOwner, approvedBrokerOwner, approvedProcessOwner, approvedUpdateLaunchOwner].includes(resolve(file))) {
       fail(`${relative(root, file)} contains forbidden native process execution`);
     }
   }
