@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Windows-first disk cleanup desktop foundation"
 authors = ["Supa Diska Klinah contributors"]
 edition = "2024"
+publish = false
 rust-version = "1.90"
 license = "MIT"
 default-run = "supa-diska-klinah"
