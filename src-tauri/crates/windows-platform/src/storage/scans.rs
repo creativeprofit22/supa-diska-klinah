@@ -16,7 +16,7 @@ use cleanup_core::{
 };
 use std::{
     collections::{HashMap, VecDeque},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -357,6 +357,15 @@ impl StorageService {
         }
         state.roots.insert(id.clone(), (now, root, module));
         Ok(id)
+    }
+    /// Canonical path of an authorized root that has not started yet. Used only to pick
+    /// the scan worker count for its volume; authorization is still enforced by `start_with`.
+    pub fn root_path(&self, root_id: &str) -> Option<PathBuf> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .roots
+            .get(root_id)
+            .map(|(_, root, _)| root.canonical_path.clone())
     }
     /// Internal typed feature runner. No algorithms for future features are registered.
     /// Runners must be cooperative and must not spawn additional unmanaged workers.

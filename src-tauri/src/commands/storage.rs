@@ -6,6 +6,7 @@ use windows_platform::{
         self, PageRequest, StorageError, StorageModule, StoragePage, StorageSelection,
         StorageStatus,
         root_picker::{NativeScope, RootChoice, ScopeService},
+        scan_profile,
         scans::{JobError, StorageService},
     },
 };
@@ -61,6 +62,25 @@ pub(super) fn decode<T: DeserializeOwned>(
         return Err(StorageCommandError::invalid());
     }
     storage::decode_command(bytes).map_err(|error| JobError::Storage(error).into())
+}
+// Shared by every scan command module; some test harnesses include only this file.
+#[allow(dead_code)]
+/// Scan limits for an authorized root: the worker count comes from the saved scan profile
+/// and the root's volume (`auto`), always clamped to 1..=MAX_WORKERS. Blocking (device query).
+pub(super) fn scan_limits(
+    cleanup: &CleanupService,
+    scans: &StorageService,
+    root_id: &str,
+) -> storage::StorageLimits {
+    let workers = scans
+        .root_path(root_id)
+        .map_or(scan_profile::HDD_WORKERS, |path| {
+            scan_profile::workers_for_path(cleanup.scan_profile(), &path)
+        });
+    storage::StorageLimits {
+        workers,
+        ..Default::default()
+    }
 }
 pub(super) fn valid_id(id: &str) -> bool {
     id.len() == 32

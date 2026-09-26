@@ -101,7 +101,9 @@ impl Fixture {
                 undo_cleanup,
                 cleanup_history,
                 get_auto_cleanup_policy,
-                set_auto_cleanup_policy
+                set_auto_cleanup_policy,
+                get_scan_settings,
+                set_scan_settings
             ])
             .build(tauri::generate_context!())
             .unwrap();

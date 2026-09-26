@@ -13,6 +13,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 
 use super::{filesystem::wide, recycle::RecycleItem};
+use crate::storage::scan_profile::ScanSettings;
 
 pub const MAX_ITEMS: usize = 1_000;
 pub const MAX_EXECUTION_PAGE: usize = 100;
@@ -942,6 +943,26 @@ impl CleanupStorage {
         write_json(&self.root.join("policy.json"), policy, true)
     }
 
+    /// Scan concurrency lives in its own file so journal and policy schemas stay unchanged.
+    pub fn scan_settings(&self) -> Result<ScanSettings, StorageError> {
+        let path = self.root.join("scan-settings.json");
+        if !path.exists() {
+            return Ok(ScanSettings::default());
+        }
+        let settings: ScanSettings = read_json(&path)?;
+        if !settings.is_valid() {
+            return Err(StorageError::Invalid);
+        }
+        Ok(settings)
+    }
+
+    pub fn write_scan_settings(&self, settings: &ScanSettings) -> Result<(), StorageError> {
+        if !settings.is_valid() {
+            return Err(StorageError::Invalid);
+        }
+        write_json(&self.root.join("scan-settings.json"), settings, true)
+    }
+
     pub fn project_roots(&self) -> Result<Vec<ProjectRoot>, StorageError> {
         let path = self.root.join("project-roots.json");
         if !path.exists() {
@@ -1189,6 +1210,40 @@ mod tests {
         ));
         fs::create_dir(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn scan_settings_default_round_trip_and_fail_closed() {
+        use crate::storage::scan_profile::ScanProfile;
+        let root = temp();
+        let storage = CleanupStorage::open(root.clone()).unwrap();
+        assert_eq!(storage.scan_settings().unwrap(), ScanSettings::default());
+
+        let hdd = ScanSettings {
+            schema_version: 1,
+            profile: ScanProfile::Hdd,
+        };
+        storage.write_scan_settings(&hdd).unwrap();
+        assert_eq!(storage.scan_settings().unwrap(), hdd);
+        assert!(
+            storage
+                .write_scan_settings(&ScanSettings {
+                    schema_version: 9,
+                    profile: ScanProfile::Ssd,
+                })
+                .is_err()
+        );
+        assert_eq!(storage.scan_settings().unwrap(), hdd);
+
+        for bytes in [
+            &br#"{"schemaVersion":2,"profile":"ssd"}"#[..],
+            br#"{"schemaVersion":1,"profile":"ssd","workers":64}"#,
+            b"{",
+        ] {
+            fs::write(root.join("scan-settings.json"), bytes).unwrap();
+            assert_eq!(storage.scan_settings(), Err(StorageError::Invalid));
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

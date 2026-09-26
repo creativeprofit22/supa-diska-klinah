@@ -1,4 +1,7 @@
 use crate::history::{HistoryCursor, HistoryKind, HistoryPage, HistoryRequest};
+use crate::storage::scan_profile::{
+    SCAN_SETTINGS_SCHEMA_VERSION, ScanProfile, ScanSettings, resolve_workers, seek_penalty,
+};
 use cleanup_core::{
     ArtifactRole, CandidateProofScope, FileSystem, PreviewRecord, ProtectionPolicy, ScanDiagnostic,
     ScanLimits, ScanSnapshot, revalidate_candidate,
@@ -340,11 +343,17 @@ impl CleanupService {
         let protection = current_protection().map_err(|_| CleanupServiceError::ValidationFailed)?;
         let scanned_at = now_seconds()?;
         let divisor = selected.len().max(1);
-        let limits = divided_project_limits(divisor);
+        let base_limits = divided_project_limits(divisor);
+        let profile = self.scan_profile();
         let mut records = Vec::new();
         let mut diagnostics = Vec::new();
         let mut scanned_ids = HashSet::new();
         for root in selected {
+            let root_seek_penalty = match profile {
+                ScanProfile::Auto => seek_penalty(Path::new(&root.display_path)),
+                ScanProfile::Ssd | ScanProfile::Hdd => None,
+            };
+            let limits = project_root_limits(base_limits, profile, root_seek_penalty);
             let discovery = discover_project_artifacts_with_limits(
                 Arc::new(WindowsFileSystem),
                 PathBuf::from(&root.display_path),
@@ -1122,6 +1131,45 @@ impl CleanupService {
         self.storage.policy().map_err(map_storage_error)
     }
 
+    /// Effective scan settings, matching what `scan_profile` hands to scans. Stored
+    /// content that is corrupt, oversized, or from another schema reads as the default
+    /// (`auto`) so the UI can show it and a save can replace the bad file. I/O failures
+    /// still surface so a transient error stays retryable rather than masked.
+    pub fn scan_settings(&self) -> Result<ScanSettings, CleanupServiceError> {
+        match self.storage.scan_settings() {
+            Ok(settings) => Ok(settings),
+            Err(StorageError::Invalid | StorageError::TooLarge) => Ok(ScanSettings::default()),
+            Err(error) => Err(map_storage_error(error)),
+        }
+    }
+
+    /// Profile used to resolve scan workers. An unreadable settings file falls back to
+    /// `auto`, whose unknown-media path is the conservative HDD count.
+    pub fn scan_profile(&self) -> ScanProfile {
+        self.storage
+            .scan_settings()
+            .map(|settings| settings.profile)
+            .unwrap_or_default()
+    }
+
+    pub fn set_scan_profile(
+        &self,
+        profile: ScanProfile,
+    ) -> Result<ScanSettings, CleanupServiceError> {
+        let settings = ScanSettings {
+            schema_version: SCAN_SETTINGS_SCHEMA_VERSION,
+            profile,
+        };
+        let _writer = self
+            .writer
+            .lock()
+            .map_err(|_| CleanupServiceError::Conflict)?;
+        self.storage
+            .write_scan_settings(&settings)
+            .map_err(map_storage_error)?;
+        Ok(settings)
+    }
+
     pub fn set_policy(
         &self,
         enabled: bool,
@@ -1878,6 +1926,19 @@ fn divided_project_limits(divisor: usize) -> ScanLimits {
         max_diagnostics: (PROJECT_DISCOVERY_LIMITS.max_diagnostics / divisor).max(1),
         max_measurement_entries: (PROJECT_DISCOVERY_LIMITS.max_measurement_entries / divisor)
             .max(1),
+    }
+}
+
+/// Per-root discovery limits: the divided budgets with the saved profile's worker count.
+/// `seek_penalty` is only consulted for `ScanProfile::Auto` (see `workers_for_path`).
+fn project_root_limits(
+    base: ScanLimits,
+    profile: ScanProfile,
+    seek_penalty: Option<bool>,
+) -> ScanLimits {
+    ScanLimits {
+        max_workers: resolve_workers(profile, seek_penalty),
+        ..base
     }
 }
 
@@ -3397,6 +3458,73 @@ mod tests {
         let reopened = CleanupService::new(root.clone()).unwrap();
         assert_eq!(reopened.policy().unwrap().grace_days, 14);
         assert!(!reopened.policy().unwrap().enabled);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_root_limits_apply_the_profile_workers_and_keep_divided_budgets() {
+        use crate::storage::scan_profile::{HDD_WORKERS, SSD_WORKERS};
+        let table = [
+            (ScanProfile::Ssd, None, SSD_WORKERS),
+            (ScanProfile::Hdd, None, HDD_WORKERS),
+            (ScanProfile::Auto, Some(false), SSD_WORKERS),
+            (ScanProfile::Auto, None, HDD_WORKERS),
+        ];
+        assert_eq!((SSD_WORKERS, HDD_WORKERS), (4, 2));
+        for divisor in [1, 3] {
+            let base = divided_project_limits(divisor);
+            for (profile, seek_penalty, expected) in table {
+                let limits = project_root_limits(base, profile, seek_penalty);
+                let context = format!("{profile:?} {seek_penalty:?} /{divisor}");
+                assert_eq!(limits.max_workers, expected, "{context}");
+                assert_eq!(
+                    limits.max_visited_entries, base.max_visited_entries,
+                    "{context}"
+                );
+                assert_eq!(limits.max_candidates, base.max_candidates, "{context}");
+                assert_eq!(limits.max_diagnostics, base.max_diagnostics, "{context}");
+                assert_eq!(
+                    limits.max_measurement_entries, base.max_measurement_entries,
+                    "{context}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scan_settings_and_profile_persist_and_report_auto_when_corrupt() {
+        let root = std::env::temp_dir().join(format!(
+            "supa-diska-scan-profile-{}-{}",
+            std::process::id(),
+            getrandom::u64().unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let service = CleanupService::new(root.clone()).unwrap();
+        assert_eq!(service.scan_profile(), ScanProfile::Auto);
+        service.set_scan_profile(ScanProfile::Ssd).unwrap();
+        assert_eq!(service.scan_profile(), ScanProfile::Ssd);
+        drop(service);
+
+        let reopened = CleanupService::new(root.clone()).unwrap();
+        assert_eq!(reopened.scan_profile(), ScanProfile::Ssd);
+        std::fs::write(root.join("cleanup").join("scan-settings.json"), b"{").unwrap();
+        assert_eq!(reopened.scan_settings().unwrap(), ScanSettings::default());
+        assert_eq!(reopened.scan_profile(), ScanProfile::Auto);
+
+        let settings_path = root.join("cleanup").join("scan-settings.json");
+        for bytes in [
+            &br#"{"schemaVersion":2,"profile":"ssd"}"#[..],
+            br#"{"schemaVersion":1,"profile":"turbo"}"#,
+        ] {
+            std::fs::write(&settings_path, bytes).unwrap();
+            assert_eq!(reopened.scan_settings().unwrap(), ScanSettings::default());
+            assert_eq!(reopened.scan_profile(), ScanProfile::Auto);
+        }
+
+        // Saving a valid profile replaces the corrupt file.
+        reopened.set_scan_profile(ScanProfile::Hdd).unwrap();
+        assert_eq!(reopened.scan_settings().unwrap().profile, ScanProfile::Hdd);
+        assert_eq!(reopened.scan_profile(), ScanProfile::Hdd);
         std::fs::remove_dir_all(root).unwrap();
     }
 

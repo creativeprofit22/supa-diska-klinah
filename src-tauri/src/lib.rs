@@ -90,6 +90,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::cleanup::cleanup_history,
             commands::cleanup::get_auto_cleanup_policy,
             commands::cleanup::set_auto_cleanup_policy,
+            commands::cleanup::get_scan_settings,
+            commands::cleanup::set_scan_settings,
             commands::build_artifacts::list_build_profiles,
             commands::build_artifacts::register_build_profile,
             commands::build_artifacts::remove_build_profile,

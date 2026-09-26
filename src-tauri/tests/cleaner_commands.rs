@@ -10,6 +10,7 @@ use commands::{cleaner::*, storage::*};
 use serde::Deserialize;
 use std::sync::Arc;
 use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder};
+use windows_platform::cleanup::CleanupService;
 use windows_platform::storage::{cleaner, root_picker::ScopeService, scans::StorageService};
 
 fn invoke(
@@ -20,8 +21,19 @@ fn invoke(
     url: &str,
     scopes: Arc<ScopeService>,
 ) -> Result<tauri::ipc::InvokeResponseBody, String> {
+    // Scan commands read the saved scan profile from the cleanup service; each call gets
+    // an isolated, empty state directory (default `auto` profile).
+    static NEXT_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let state = std::env::temp_dir().join(format!(
+        "supa-diska-scan-state-{}-{}",
+        std::process::id(),
+        NEXT_STATE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&state);
+    let cleanup = Arc::new(CleanupService::new(state.clone()).unwrap());
     let app = mock_builder()
         .manage(Arc::new(StorageService::new()))
+        .manage(cleanup)
         .manage(scopes)
         .invoke_handler(tauri::generate_handler![
             list_cleaner_catalog,
@@ -40,7 +52,7 @@ fn invoke(
     let window = tauri::WebviewWindowBuilder::new(&app, label, Default::default())
         .build()
         .unwrap();
-    get_ipc_response(
+    let response = get_ipc_response(
         &window,
         tauri::webview::InvokeRequest {
             cmd: cmd.into(),
@@ -56,7 +68,9 @@ fn invoke(
             invoke_key: INVOKE_KEY.into(),
         },
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string());
+    let _ = std::fs::remove_dir_all(&state);
+    response
 }
 #[derive(Deserialize)]
 struct Catalog {

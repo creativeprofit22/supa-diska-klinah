@@ -13,6 +13,7 @@ pub mod known_folders;
 pub mod large_files;
 pub(crate) mod protection;
 pub mod root_picker;
+pub mod scan_profile;
 pub mod scans;
 #[cfg(test)]
 mod step6_tests;

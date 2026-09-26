@@ -1,8 +1,9 @@
-use super::storage::{StorageCommandError, decode, valid_id};
+use super::storage::{StorageCommandError, decode, scan_limits, valid_id};
 use serde::Deserialize;
 use std::sync::Arc;
+use windows_platform::cleanup::CleanupService;
 use windows_platform::storage::{
-    StorageLimits, StorageModule, cleaner, current_protection,
+    StorageModule, cleaner, current_protection,
     scans::{JobError, StorageService},
 };
 
@@ -27,6 +28,7 @@ struct StartInput {
 #[tauri::command]
 pub(crate) async fn start_cleaner(
     service: tauri::State<'_, Arc<StorageService>>,
+    cleanup: tauri::State<'_, Arc<CleanupService>>,
     request: tauri::ipc::Request<'_>,
 ) -> Result<String, StorageCommandError> {
     let input: StartInput = decode(&request)?;
@@ -34,12 +36,13 @@ pub(crate) async fn start_cleaner(
         return Err(StorageCommandError::invalid());
     }
     let service = Arc::clone(service.inner());
+    let cleanup = Arc::clone(cleanup.inner());
     tauri::async_runtime::spawn_blocking(move || {
         let protection = current_protection().map_err(JobError::Storage)?;
         service.start_with(
             StorageModule::Cleaner,
             Some(&input.root_id),
-            StorageLimits::default(),
+            scan_limits(&cleanup, &service, &input.root_id),
             Some(protection.clone()),
             move |context| cleaner::discover(context, &protection).map_err(JobError::Storage),
         )

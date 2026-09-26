@@ -26,6 +26,8 @@ fn main() {
                 "cleanup_history",
                 "get_auto_cleanup_policy",
                 "set_auto_cleanup_policy",
+                "get_scan_settings",
+                "set_scan_settings",
                 "list_build_profiles",
                 "register_build_profile",
                 "remove_build_profile",

@@ -6,6 +6,7 @@ use windows_platform::cleanup::{
     ProjectRoot,
 };
 use windows_platform::history::{HistoryKind, HistoryPage, HistoryRequest};
+use windows_platform::storage::scan_profile::{ScanProfile, ScanSettings};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -228,6 +229,24 @@ pub(crate) async fn set_auto_cleanup_policy(
 ) -> Result<AutoCleanupPolicy, CleanupCommandError> {
     let service = Arc::clone(service.inner());
     run_blocking(move || service.set_policy(enabled, grace_days)).await
+}
+
+#[tauri::command]
+pub(crate) async fn get_scan_settings(
+    service: tauri::State<'_, Arc<CleanupService>>,
+) -> Result<ScanSettings, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.scan_settings()).await
+}
+
+/// `profile` is a closed enum, so unknown values fail deserialization before this runs.
+#[tauri::command]
+pub(crate) async fn set_scan_settings(
+    service: tauri::State<'_, Arc<CleanupService>>,
+    profile: ScanProfile,
+) -> Result<ScanSettings, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.set_scan_profile(profile)).await
 }
 
 #[cfg(test)]

@@ -93,7 +93,9 @@ impl Fixture {
                 undo_cleanup,
                 cleanup_history,
                 get_auto_cleanup_policy,
-                set_auto_cleanup_policy
+                set_auto_cleanup_policy,
+                get_scan_settings,
+                set_scan_settings
             ])
             .build(tauri::generate_context!())
             .unwrap();
@@ -457,4 +459,93 @@ fn large_file_start_rejects_bad_filters_paths_cross_module_and_foreign_callers()
                 .contains("not allowed")
         );
     }
+}
+#[test]
+fn scan_settings_ipc_round_trips_rejects_unknown_profiles_and_foreign_callers() {
+    use windows_platform::storage::scan_profile::{ScanProfile, ScanSettings};
+    let f = Fixture::new();
+    let read = |f: &Fixture| -> ScanSettings {
+        f.invoke_at(
+            "get_scan_settings",
+            "{}",
+            false,
+            "main",
+            "http://tauri.localhost",
+        )
+        .unwrap()
+        .deserialize()
+        .unwrap()
+    };
+    assert_eq!(read(&f), ScanSettings::default());
+    let saved: ScanSettings = f
+        .invoke_at(
+            "set_scan_settings",
+            r#"{"profile":"hdd"}"#,
+            false,
+            "main",
+            "http://tauri.localhost",
+        )
+        .unwrap()
+        .deserialize()
+        .unwrap();
+    assert_eq!(
+        saved,
+        ScanSettings {
+            schema_version: 1,
+            profile: ScanProfile::Hdd
+        }
+    );
+    assert_eq!(read(&f), saved);
+    for bad in [r#"{"profile":"nvme"}"#, r#"{"profile":4}"#, "{}"] {
+        assert!(
+            f.invoke_at(
+                "set_scan_settings",
+                bad,
+                false,
+                "main",
+                "http://tauri.localhost"
+            )
+            .is_err(),
+            "{bad}"
+        );
+    }
+    assert_eq!(read(&f), saved);
+    for (label, url) in [
+        ("foreign", "http://tauri.localhost"),
+        ("main", "https://example.com"),
+    ] {
+        assert!(
+            f.invoke_at(
+                "set_scan_settings",
+                r#"{"profile":"ssd"}"#,
+                false,
+                label,
+                url
+            )
+            .unwrap_err()
+            .contains("not allowed")
+        );
+    }
+    assert_eq!(read(&f), saved);
+
+    // A corrupt or future-schema file reads as the effective `auto` default, and saving
+    // a valid profile replaces it.
+    let settings_path = f
+        .path
+        .join("state")
+        .join("cleanup")
+        .join("scan-settings.json");
+    for bytes in [&b"{"[..], br#"{"schemaVersion":2,"profile":"ssd"}"#] {
+        std::fs::write(&settings_path, bytes).unwrap();
+        assert_eq!(read(&f), ScanSettings::default());
+    }
+    f.invoke_at(
+        "set_scan_settings",
+        r#"{"profile":"hdd"}"#,
+        false,
+        "main",
+        "http://tauri.localhost",
+    )
+    .unwrap();
+    assert_eq!(read(&f), saved);
 }
