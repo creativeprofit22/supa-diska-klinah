@@ -47,6 +47,9 @@ function installReplay() {
     if(command==='prepare_vendor_job') {if(input.programId!==id(50)||input.snapshotId!==id(1)) throw Error('Wrong vendor selection');state.prepared++;return {...job,jobId:id(901),state:'awaitingConfirmation'};}
     if(command==='release_storage_scan'||command==='cancel_storage_scan'||command==='release_vendor_job') return;
     if(command==='cleanup_history') return {records:[],nextCursor:null};
+    // Read-only shell/settings reads. English is pinned so assertions don't depend on the host UI language.
+    if(command==='get_app_settings') return {schemaVersion:1,language:'en',updateCheck:false};
+    if(command==='get_update_status') return {currentVersion:'0.1.0',configured:false,update:{state:'idle'}};
     state.forbidden++; throw Error('Unapproved native invoke in replay: '+command);
   }};
   addEventListener('DOMContentLoaded',()=>{const note=document.createElement('p');note.setAttribute('role','note');note.textContent='SYNTHETIC FIXTURE REPLAY ONLY — all native IPC intercepted; fictional paths/programs; no filesystem or vendor connection.';document.body.prepend(note);});

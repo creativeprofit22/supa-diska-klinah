@@ -246,8 +246,8 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
         with:
           manifest-path: src-tauri/Cargo.toml
-          arguments: --locked
-          command-arguments: --config src-tauri/deny.toml
+          # --config is a top-level cargo-deny flag (not a `check` flag); relative to the workspace root.
+          arguments: --locked --config src-tauri/deny.toml
 
   # Release, stage 1: build and verify in the declared signing mode, then attest.
   # Nothing is published here. Stage 2 runs only if every step below passed.

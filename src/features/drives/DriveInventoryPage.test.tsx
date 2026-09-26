@@ -154,7 +154,8 @@ it("is reachable through the actual shell navigation and route", async () => {
   expect(await screen.findByRole("heading", { name: "Windows (C:\\)" })).toBeTruthy();
   expect(screen.getByRole("link", { name: "Drives" }).getAttribute("aria-current")).toBe("page");
   expect(document.title).toBe("Drives | Supa Diska Klinah");
-  expect(invoke).toHaveBeenCalledExactlyOnceWith("list_drive_inventory");
+  // The shell also reads update status once at startup; nothing else may be invoked.
+  expect(invoke.mock.calls.map(([command]) => command).sort()).toEqual(["get_update_status", "list_drive_inventory"]);
 });
 
 it("renders Spanish copy and locale-formatted sizes for es-MX", async () => {
