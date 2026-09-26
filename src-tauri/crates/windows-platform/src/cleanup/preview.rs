@@ -95,6 +95,26 @@ pub fn discover_project_artifacts(
     discover_project_artifacts_with_context(file_system, root, protection, &WindowsEntropy)
 }
 
+/// Same discovery with an explicit rule-pool size, clamped to the engine's 1..=4 bound.
+pub fn discover_project_artifacts_with_workers(
+    root: &str,
+    workers: usize,
+) -> Result<ProjectArtifactDiscovery, CleanupPreviewError> {
+    let file_system: Arc<dyn FileSystem> = Arc::new(WindowsFileSystem);
+    let protection = current_protection()?;
+    let root = validate_project_root(file_system.as_ref(), &protection, root)?;
+    discover_project_artifacts_with_limits(
+        file_system,
+        root,
+        protection,
+        &WindowsEntropy,
+        ScanLimits {
+            max_workers: workers.clamp(1, cleanup_core::storage::MAX_WORKERS),
+            ..PROJECT_DISCOVERY_LIMITS
+        },
+    )
+}
+
 pub(crate) struct PrivateCleanupScan {
     pub preview: CleanupPreview,
     pub snapshot: ScanSnapshot,

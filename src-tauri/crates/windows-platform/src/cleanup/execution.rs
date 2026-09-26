@@ -1999,6 +1999,10 @@ fn map_storage_error(error: StorageError) -> CleanupServiceError {
 }
 
 #[cfg(test)]
+#[path = "perf_disk_tests.rs"]
+mod perf_disk_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::cleanup::storage::{

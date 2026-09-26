@@ -1,0 +1,83 @@
+# Manual-only CI build-caching experiment (docs/performance.md, "CI caching").
+# Never runs on push or pull_request. Each strategy builds the same revision on a fresh runner
+# so GitHub job timings compare: no cache, Cargo registry/target cache, and sccache.
+# sccache is only valid with CARGO_INCREMENTAL=0 (incrementally compiled crates are not cacheable);
+# local development keeps incremental builds and is guarded by scripts/perf/check-build-config.mjs.
+name: Perf CI cache experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      pass:
+        description: "Label for this pass (cold = first run, warm = second run reusing caches)"
+        required: true
+        type: choice
+        options: [cold, warm]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.strategy }}, ${{ inputs.pass }})
+    runs-on: windows-2025
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        strategy: [none, cargo-cache, sccache]
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Check out repository
+        # actions/checkout v4.2.2
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+        working-directory: src-tauri
+
+      - name: Restore Cargo registry and target cache
+        if: matrix.strategy == 'cargo-cache'
+        # actions/cache v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            src-tauri/target
+          key: perf-cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/rust-toolchain.toml') }}
+          restore-keys: perf-cargo-${{ runner.os }}-
+
+      - name: Set up sccache
+        if: matrix.strategy == 'sccache'
+        # mozilla-actions/sccache-action v0.0.11
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: "v0.18.0"
+
+      - name: Enable sccache for this clean CI build only
+        if: matrix.strategy == 'sccache'
+        shell: pwsh
+        run: |
+          "SCCACHE_GHA_ENABLED=true" >> $env:GITHUB_ENV
+          "RUSTC_WRAPPER=sccache" >> $env:GITHUB_ENV
+          "CARGO_INCREMENTAL=0" >> $env:GITHUB_ENV
+
+      - name: Timed workspace build
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          cargo build --workspace --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $watch.Stop()
+          $line = "strategy=${{ matrix.strategy }} pass=${{ inputs.pass }} buildSeconds=$([Math]::Round($watch.Elapsed.TotalSeconds, 1))"
+          Write-Host $line
+          "### $line" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Report sccache statistics
+        if: matrix.strategy == 'sccache'
+        run: sccache --show-stats

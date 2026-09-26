@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "machineClass": { "cpuModel": "Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz", "logicalProcessors": 12 },
+  "budgets": [
+    { "id": "compile.clean-rust", "kind": "compile", "path": ["results", "clean.rust", "stats", "median"], "max": 240000 },
+    { "id": "compile.noop-rust", "kind": "compile", "path": ["results", "noop.rust", "stats", "median"], "max": 3000 },
+    { "id": "compile.rust-leaf-edit", "kind": "compile", "path": ["results", "rust-leaf.rust", "stats", "median"], "max": 60000 },
+    { "id": "compile.rust-app-edit", "kind": "compile", "path": ["results", "rust-app.rust", "stats", "median"], "max": 60000 },
+    { "id": "compile.frontend-tsc", "kind": "compile", "path": ["results", "frontend.tsc", "stats", "median"], "max": 10000 },
+    { "id": "compile.frontend-vite", "kind": "compile", "path": ["results", "frontend.vite", "stats", "median"], "max": 3000 },
+    { "id": "compile.after-cleanup", "kind": "compile", "path": ["results", "after-cleanup.rust", "stats", "median"], "max": 5000 },
+
+    { "id": "runtime.large-files-full-w4", "kind": "runtime", "path": ["results", "large-files.full.w4", "elapsedMs", "median"], "max": 60000 },
+    { "id": "runtime.disk-analyzer-full-w4", "kind": "runtime", "path": ["results", "disk-analyzer.full.w4", "elapsedMs", "median"], "max": 9000 },
+    { "id": "runtime.project-discovery-full-w4", "kind": "runtime", "path": ["results", "project-discovery.full.w4", "elapsedMs", "median"], "max": 10000 },
+    { "id": "runtime.first-progress-w4", "kind": "runtime", "path": ["results", "large-files.full.w4", "firstProgressMs", "p90"], "max": 250 },
+    { "id": "runtime.cancel-latency-large-files", "kind": "runtime", "path": ["results", "large-files.cancel.w4", "cancelLatencyMs", "p90"], "max": 500, "machineIndependent": true },
+    { "id": "runtime.cancel-latency-disk-analyzer", "kind": "runtime", "path": ["results", "disk-analyzer.cancel.w4", "cancelLatencyMs", "p90"], "max": 500, "machineIndependent": true },
+    { "id": "runtime.working-set-peak", "kind": "runtime", "path": ["results", "disk-analyzer.full.w4", "workingSetPeak", "max"], "max": 67108864, "machineIndependent": true },
+    { "id": "runtime.handle-leak", "kind": "runtime", "path": ["results", "large-files.full.w4", "handleLeak"], "max": 4, "machineIndependent": true },
+    { "id": "runtime.thread-leak", "kind": "runtime", "path": ["results", "large-files.full.w4", "threadLeak"], "max": 2, "machineIndependent": true },
+
+    { "id": "app.startup-ready", "kind": "app", "path": ["startup", "readyMs", "median"], "max": 3000 },
+    { "id": "app.idle-cpu-percent", "kind": "app", "path": ["idle", "cpuPercentOfMachine"], "max": 1, "machineIndependent": true },
+    { "id": "app.idle-main-handle-growth", "kind": "app", "path": ["idle", "mainHandleGrowth"], "max": 20, "machineIndependent": true },
+    { "id": "app.route-main-handle-growth", "kind": "app", "path": ["routes", "mainHandleGrowth"], "max": 100, "machineIndependent": true },
+
+    { "id": "disk.permanent-external-reclaimed", "kind": "disk", "path": ["scenarios", "permanent", "externalReclaimedBytes", "min"], "min": 1, "machineIndependent": true },
+    { "id": "disk.quarantine-purge-reclaimed", "kind": "disk", "path": ["scenarios", "quarantine", "afterPurge.externalReclaimedBytes", "min"], "min": 1, "machineIndependent": true }
+  ]
+}

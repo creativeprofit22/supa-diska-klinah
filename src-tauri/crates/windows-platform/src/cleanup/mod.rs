@@ -18,7 +18,7 @@ pub(crate) use filesystem::IdentityGuard;
 pub use filesystem::WindowsFileSystem;
 pub use preview::{
     CleanupPreview, CleanupPreviewError, ProjectArtifactDiscovery, discover_project_artifacts,
-    preview_temporary_caches,
+    discover_project_artifacts_with_workers, preview_temporary_caches,
 };
 pub use storage::{
     ArtifactBudgetPolicy, AutoCleanupPolicy, BuildEcosystem, BuildProfile, CleanupDisposition,

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 function fail(message) {
   console.error(`Dependency check failed: ${message}`);
@@ -46,13 +46,19 @@ for (const required of ['ed25519-dalek = { version = "=2.2.0"', 'aho-corasick = 
   if (!protectionCoreCargo.includes(required)) fail(`protection-core must pin ${required}`);
 }
 
-const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
-const actionLines = workflow.split(/\r?\n/).filter((line) => line.trim().startsWith("uses:"));
-if (
-  actionLines.length === 0 ||
-  actionLines.some((line) => !/@[0-9a-f]{40}$/.test(line.trim()))
-) {
-  fail("every GitHub Action must use a full immutable commit SHA");
+const workflowFiles = readdirSync(".github/workflows")
+  .filter((name) => /\.ya?ml$/.test(name))
+  .sort();
+if (!workflowFiles.includes("ci.yml")) fail("missing .github/workflows/ci.yml");
+for (const name of workflowFiles) {
+  const workflow = readFileSync(`.github/workflows/${name}`, "utf8");
+  const actionLines = workflow.split(/\r?\n/).filter((line) => line.trim().startsWith("uses:"));
+  if (
+    actionLines.length === 0 ||
+    actionLines.some((line) => !/@[0-9a-f]{40}$/.test(line.trim()))
+  ) {
+    fail(`every GitHub Action in ${name} must use a full immutable commit SHA`);
+  }
 }
 
 for (const lockfile of ["pnpm-lock.yaml", "src-tauri/Cargo.lock"]) {
