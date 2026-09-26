@@ -76,6 +76,18 @@ Command: `cargo test --manifest-path src-tauri/Cargo.toml -p windows-platform cl
 
 Observed: the test used uniquely named synthetic files under the Windows temporary directory; Recycle Bin deletion and exact undo, quarantine across service restart and undo, enabled-policy due purge, and separately invoked permanent deletion all passed. The owned fixture tree was removed afterward. This does not verify recovery of unrelated or valuable files.
 
+### Cleanup drill record — 2026-09-26 (release candidate, awaiting acceptance)
+
+The same ignored drill was rerun on `main` at `506c6ac`, the code in CI release dry run `36267813902`. It used the same command with `-j 1`: 1 passed, 0 failed, 74.4 s, and it left no orphaned Recycle Bin entry. For the installed candidate, evidence comes from today's accepted storage run `b1e2fe55-84b4-400f-9e29-c26ee88f9df5` (`.gg/smoke-artifacts/release-step3-storage/acceptance.json`).
+
+| Item | Evidence | Gap |
+| --- | --- | --- |
+| Recycle Bin and exact undo | Drill: the item left its path and undo restored the same path | The installed-app run used quarantine for recovery, not the Recycle Bin |
+| Quarantine, restart, undo | Drill: quarantine, drop and reopen the cleanup service, then undo restores the item once. Installed app: quarantine then undo restored both items (5,242,880 bytes). Replaying undo returned the same completed execution and did not restore twice. A later app restart deleted nothing on its own | On the installed app, the undo happened before the restart, not after it |
+| Automatic cleanup, grace, due purge | Drill: the policy was enabled with `grace_days: 1`, the deadline was forced into the past, and `purge_due` purged the item. Unit test: the grace setting persists across a reopen, and the policy defaults to disabled | The deadline was forced rather than waited out; this was not run on the installed app |
+| Permanent deletion needs the second warning | Installed app: the native confirmation defaulted to **No**. Cancelling left the fixture unchanged; Yes removed exactly the one 1 MiB file, and undo was then refused. Drill: permanent deletion went through a separate call | None |
+| Totals | Installed quarantine: selected / processed / quarantined / occupied 5,242,880; failed / purged / reclaimed 0. After undo: quarantined 0. Permanent: selected / processed 1,048,576; failed / quarantined / purged / occupied / reclaimed 0 | Suspected under-report: the permanent item's `occupiedBytes` was 0 for a 1 MiB file. `purgedBytes` sums occupied bytes, and `reclaimedBytes` is capped at occupied (`execution.rs`), so both read 0 although the file was deleted. It never over-reports freed space, but it needs a fix or an explanation before this item is accepted. The earlier accepted run shows the same |
+
 ## Build artifact budget drill
 
 **Current release status: drill accepted 2026-09-26; release still gated by [release verification](verification/release.md).** The 2026-09-05 items below describe only that executable, identified by its hash. The four items dated 2026-09-26 (budget enforcement/quarantine, protected artifact identities during enforcement, build-generation undo, and the complete screenshot set) were run on the installed per-machine candidate. They were repeated on the rebuilt installer carrying the protected-list layout fix, and the user accepted them; the full evidence is in release verification. The older alpha pass later in this document applies to its separate August candidate.
