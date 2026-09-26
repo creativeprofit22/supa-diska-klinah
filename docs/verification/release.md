@@ -4,7 +4,7 @@ Evidence for the unsigned release candidate. Manual items stay open until they a
 
 ## Status
 
-**Unsigned release candidate: automated gates and non-elevated acceptance passed; elevated install/uninstall and the installer UAC/SmartScreen observations are recorded below but not yet accepted; the per-operation UAC counts, parity drivers, drill items, Spanish review, published update and the signed run remain open.** No release has been published from this candidate.
+**Unsigned release candidate: automated gates and non-elevated acceptance passed; elevated install/uninstall and the installer UAC/SmartScreen observations were accepted by the user on 2026-09-26; the per-operation UAC counts, parity drivers, drill items, Spanish review, published update and the signed run remain open.** No release has been published from this candidate.
 
 - Candidate: HEAD `0a062f8` plus the uncommitted release-phase worktree (2026-09-26).
 - Installer: `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/Supa Diska Klinah_0.1.0_x64-setup.exe`, built with `pnpm tauri build --ci --target x86_64-pc-windows-msvc --bundles nsis` and the plain `tauri.conf.json` (no signing config). 3,572,954 bytes, SHA-256 `F2BDE7097E5E69547FFA10E75FDCBA0FCE10DEF43852BEE7012F4EEAA81928C7`.
@@ -83,9 +83,9 @@ Scheduled-task uninstall verb (`privileged-helper --remove-scheduled-tasks`, deb
 
 Open until explicitly accepted:
 
-- [ ] Elevated install of the candidate: per-machine install under Program Files, one UAC prompt, "Publisher: Unknown" shown, SmartScreen warning observed on a downloaded copy (`scripts/acceptance-release.ps1 -Phase Install -InstallerPath <installer>` from an elevated shell).
-- [ ] Uninstall cleanup: no install directory, no HKLM uninstall key, no `\SupaDiskaKlinah` folder, no helper process, user data kept on the default (silent) uninstall (`-Phase Uninstall`).
-- [ ] Uninstall with the delete-app-data checkbox ticked removes `%APPDATA%\com.supadiskaklinah.app` and `%LOCALAPPDATA%\com.supadiskaklinah.app`. The ticked case can't be driven silently.
+- [x] Elevated install of the candidate (accepted by the user 2026-09-26; evidence above): per-machine install under Program Files, one UAC prompt, "Publisher: Unknown" shown, SmartScreen warning observed on a downloaded copy (`scripts/acceptance-release.ps1 -Phase Install -InstallerPath <installer>` from an elevated shell).
+- [x] Uninstall cleanup (accepted by the user 2026-09-26; execution `d267e3c0-41ae-4b8d-bcd0-e3cfd3930cae`): no install directory, no HKLM uninstall key, no `\SupaDiskaKlinah` folder, no helper process, user data kept on the default (silent) uninstall (`-Phase Uninstall`).
+- [x] (Accepted by the user 2026-09-26; command `e51810e7-6bf3-4d09-a443-7453085d3139`.) Uninstall with the delete-app-data checkbox ticked removes `%APPDATA%\com.supadiskaklinah.app` and `%LOCALAPPDATA%\com.supadiskaklinah.app`. The ticked case can't be driven silently.
 - [ ] Exactly one UAC prompt per helper operation during the system acceptance drivers.
 - [ ] Parity drivers (`acceptance-storage-builtapp.ps1`, `acceptance-system-builtapp.ps1`, `acceptance-protection-builtapp.ps1`) on the installed build.
 - [ ] The four open build-artifact drill items in the [release checklist](../release-checklist.md): budget enforcement/quarantine, protected identities, build-generation undo, screenshot set.
