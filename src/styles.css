@@ -959,6 +959,15 @@ dialog::backdrop {
   overflow-wrap: anywhere;
 }
 
+.budget-preview > ul > li > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.protected-generation-list > li > span {
+  grid-column: 1 / -1;
+}
+
 .budget-preview .project-root-manager-heading {
   padding: 0 0 1rem;
 }

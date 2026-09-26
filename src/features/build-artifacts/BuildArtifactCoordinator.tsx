@@ -288,7 +288,7 @@ export function BuildArtifactCoordinator() {
           <h4>{t.selectedGenerations}</h4>
           {state.preview.decision.selectedGenerationIds.length === 0 ? <p>{t.nothingSelected}</p> : <ul>{state.preview.decision.selectedGenerationIds.map((id) => <li key={id}><strong>{generations.get(id)?.normalizedPath ?? id}</strong><span>{fmt.bytes(generations.get(id)?.allocatedBytes ?? 0)}</span></li>)}</ul>}
           <h4>{t.protectedGenerations}</h4>
-          {state.preview.decision.protected.length === 0 ? <p>{t.noProtected}</p> : <ul>{state.preview.decision.protected.map((item) => <li key={item.generationId}><strong>{generations.get(item.generationId)?.normalizedPath ?? item.generationId}</strong><span>{item.reasons.map((reason) => t.reasons[reason]).join(t.reasonSeparator)}</span></li>)}</ul>}
+          {state.preview.decision.protected.length === 0 ? <p>{t.noProtected}</p> : <ul className="protected-generation-list">{state.preview.decision.protected.map((item) => <li key={item.generationId}><strong>{generations.get(item.generationId)?.normalizedPath ?? item.generationId}</strong><span>{item.reasons.map((reason) => t.reasons[reason]).join(t.reasonSeparator)}</span></li>)}</ul>}
         </>}
       </section>
     </section>
