@@ -135,6 +135,24 @@ Open until explicitly accepted:
   | Teardown | Both profiles removed (list empty), project root removed (list empty), policy left disabled with no limits and no active run, the app closed, `E:\sdk-budget-drill` deleted |
 - [x] (Accepted by the user 2026-09-26.) Native Latin American Spanish review of every `es419` catalog, `windows-platform/src/i18n.rs`, and the installer strings. The user, a Spanish speaker, accepted the Spanish as fine. The basis was using the Spanish UI, native dialogs, UAC/SmartScreen text and the installer throughout the 2026-09-26 acceptance runs; no separate string-by-string pass over every catalog entry was recorded.
 - [ ] End-to-end published update (tag → release → in-app update) once `UPDATE_SIGNING_KEY` and `WINDOWS_SIGNING_MODE` are configured.
+- [ ] CI release dry run on `main` (no tag, no publish). Awaiting acceptance.
+
+  Run [`36267813902`](https://github.com/creativeprofit22/supa-diska-klinah/actions/runs/36267813902): `workflow_dispatch` with `release=true` on `main` at `a876171` (merge of PR #16), 2026-09-26 19:57–20:21 UTC, result **success**. `WINDOWS_SIGNING_MODE=unsigned`, `UPDATE_SIGNING_KEY` set on `windows-release`.
+
+  | Job | Result |
+  | --- | --- |
+  | Rust dependency policy | success |
+  | Quality | success |
+  | Native smoke (x64) | success |
+  | Native smoke (ARM64) | success |
+  | Windows release build (unsigned) | success |
+  | Publish Windows release | skipped (runs only on `v*` tags) |
+
+  Artifacts: `windows-release-assets` (3,569,471 bytes, expires 2026-10-03), `native-smoke-x64` (3,319,482 bytes), `native-smoke-ARM64` (2,149,466 bytes). After the run the repository had 0 tags (`git ls-remote --tags origin` and the tags API) and 0 GitHub releases (releases API), the same as before the merge.
+
+  The `windows-release` environment has no protection rules (no required reviewers), so the release build ran without an approval step.
+
+  An earlier attempt, run `36261096664` on `5aeb3ec`, failed at "Verify installed release in the declared signing mode": `A standard-user principal can modify the installed release: S-1-5-32-545`. That was a false positive. The write mask was built from composite rights that include read/execute bits, so the normal Users read-and-execute grant (`0x1200A9`) tripped it. PR #16 limits the mask to rights that allow changes and reads rules as SIDs. Local proof: the installed app folder and Program Files pass, while test folders granting Users `Write` or Everyone `Delete` are still rejected. Nothing was tagged or published by that run either.
 
 ## Signed release
 
