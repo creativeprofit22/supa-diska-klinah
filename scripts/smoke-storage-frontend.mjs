@@ -63,6 +63,9 @@ async function shot(name) {
   await writeFile(join(artifacts, `${name}.png`), Buffer.from(result.data,"base64"));
 }
 async function noOverflow() {
+  // A viewport override applies asynchronously; measure only after two frames so a stale
+  // pre-resize scrollWidth is not reported. Real overflow still fails the assertion below.
+  await evaluate("new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))");
   const layout = await evaluate(`({client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,overflow:[...document.querySelectorAll('body *')].filter(e=>e.getBoundingClientRect().right > document.documentElement.clientWidth + 0.5).slice(0,8).map(e=>({tag:e.tagName,cls:e.className,width:e.getBoundingClientRect().width,min:getComputedStyle(e).minWidth}))})`);
   assert.ok(layout.scroll <= layout.client, `horizontal overflow: ${JSON.stringify(layout)}`);
 }

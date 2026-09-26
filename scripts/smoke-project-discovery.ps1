@@ -134,7 +134,9 @@ function Connect-WebViewDebugSocket {
       $targets = @(Invoke-RestMethod -Uri "http://127.0.0.1:$Port/json/list" -TimeoutSec 1)
       if ($targets.Count -gt 0) { break }
     }
-    catch [Net.WebException] {}
+    # PowerShell 7 (HttpClient) raises HttpRequestException for refused connections and a
+    # cancellation/timeout exception when the 1-second budget elapses; both mean "not yet".
+    catch [Net.WebException], [Net.Http.HttpRequestException], [OperationCanceledException], [TimeoutException] {}
     Start-Sleep -Milliseconds 100
   }
   $target = $targets | Where-Object { $_.type -eq "page" } | Select-Object -First 1
