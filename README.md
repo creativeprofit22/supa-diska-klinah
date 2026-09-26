@@ -12,7 +12,10 @@ Supa Diska Klinah is a Windows-first Tauri desktop storage application. It keeps
 - Same-volume, file-only app recovery with guarded undo; atomic empty-only removal; native-confirmed permanent/vendor actions. Legacy temporary cleanup retains its separate Recycle Bin/quarantine behavior.
 - Platform-neutral validated cleanup rules and a bounded, cancellable preview scan engine.
 - Kudu v2.4.0 compatibility scope mapped but not behaviorally verified.
-- Installer bundling, signing, and updater support intentionally deferred.
+- Per-machine NSIS installer published on GitHub Releases, with SHA-256 checksums and build-provenance attestations.
+- Opt-in, user-approved self-updates verified against an Ed25519-signed manifest (off by default).
+- English and Latin American Spanish (`es-419`) interface; Spanish strings are a draft pending native review.
+- **Releases are currently unsigned** (no Windows code-signing certificate yet). Windows shows "Unknown publisher"; [verify your download](docs/installation.md#verify-your-download) before running it.
 
 ## Quick start
 
@@ -40,10 +43,19 @@ cargo +1.90.0 test --manifest-path src-tauri/Cargo.toml --workspace --locked
 pnpm tauri build --debug --no-bundle --target x86_64-pc-windows-msvc
 ```
 
-The x64 executable is launched locally as a smoke check. GitHub Actions builds and launches the ARM64 executable on a native `windows-11-arm` runner. Bundling is disabled during the foundation phase.
+The x64 executable is launched locally as a smoke check. GitHub Actions builds and launches the ARM64 executable on a native `windows-11-arm` runner. Release installers are built only by the tag-triggered release jobs; see the [release process](docs/release.md).
 
 ## Project documents
 
+- [Installation and download verification](docs/installation.md)
+- [User guide](docs/user-guide.md)
+- [Privacy and network connections](docs/privacy.md)
+- [App updates](docs/updates.md)
+- [Localization](docs/localization.md)
+- [Accessibility](docs/accessibility.md)
+- [Release process and signing modes](docs/release.md)
+- [Release verification](docs/verification/release.md)
+- [Accessibility verification](docs/verification/accessibility.md)
 - [Storage user guide](docs/storage.md)
 - [Storage verification and remaining completion gates](docs/verification/storage-parity.md)
 - [Architecture and ownership rules](docs/architecture.md)

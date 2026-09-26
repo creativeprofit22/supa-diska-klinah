@@ -70,7 +70,21 @@ These groups cover handlers implemented directly in Kudu's `index.ts` rather tha
 | Elevation | `index.ts:178-222` | `commands::elevation` | `windows-platform::elevation` | `features/elevation` | Contract mapped | Not verified |
 | Restore points | `index.ts:224-232` | `commands::restore` | `windows-platform::restore` | `features/restore` | Implemented | Verified |
 | Scan, deletion, and cloud history | `index.ts:234-302` | `commands::history` | `windows-platform::history` | `features/history` | Contract mapped | Not verified |
-| Updater operations | `index.ts:304-308` | `commands::updater` | `windows-platform::updates` | `features/updates` | Contract mapped | Not verified |
+| Updater operations | `index.ts:304-308` | `commands::self_update` | `windows-platform::self_update` | `features/settings` | Implemented | Not verified |
+
+**Self-update.** Kudu uses `electron-updater` against GitHub Releases: it checks automatically at start, downloads automatically, then calls `quitAndInstall`. **Adopted:** GitHub Releases as the host, and the NSIS installer replacing the whole install. **Changed:** the check is opt-in (off by default); check, download and install are separate user actions; install needs a native confirmation; the manifest is Ed25519-signed with a dedicated key; the installer's size and SHA-256 must match it; and a signed install refuses unsigned or differently signed updates. **Rejected:** automatic check and download, and `electron-updater`'s own HTTP stack. Updates reuse the single fixed-host WinHTTP sink with one allowlisted redirect for the installer asset. See [updates](updates.md). Unit, policy-matrix and real-`WinVerifyTrust` rehearsal evidence is in [release verification](verification/release.md); the row stays `Not verified` until a published end-to-end update is accepted.
+
+## Localization
+
+| Capability | Kudu v2.4.0 | Supa Diska Klinah | Status |
+| --- | --- | --- | --- |
+| Per-feature string namespaces | i18next namespaces | Typed per-feature `strings.ts` catalogs; a missing Spanish key is a compile error | Adopted |
+| OS locale detection with English fallback | i18next language detector | `navigator.languages` (Windows display language) with a Settings override; `es-*` → `es-419`, else English | Adopted |
+| Main-process strings | `src/main/i18n.ts` tray strings | Native Windows dialogs from `windows-platform/src/i18n.rs` (`GetUserPreferredUILanguages` or the saved setting) | Adopted |
+| Installer language | Default | NSIS English and Spanish, following Windows | Adopted |
+| Kudu's other 26 locales | Shipped | Not shipped; the catalog type accepts new languages | Deferred |
+| Right-to-left languages | Partial | No RTL language ships; new CSS uses logical properties | Deferred |
+| Machine translation (`scripts/translate.js`) | Unreviewed output shipped | Not accepted; every string needs native review ([localization](localization.md#review-rule)) | Rejected |
 
 ## Privilege classification
 

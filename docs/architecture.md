@@ -46,10 +46,16 @@ app/router
 features/dashboard       -> its API adapter and status state
 features/cleanup         -> preview, plan, execution, undo, history, and artifact coordinator composition
 features/build-artifacts -> typed build APIs, polling state, and reusable budget surfaces
-features/settings        -> persisted cleanup and artifact-budget policy composition
+features/settings        -> persisted cleanup and artifact-budget policy, language and app-update composition
 features/protection      -> overview, scan, processes, quarantine, rules and password check pages
 shared                   -> no app or feature imports
+shared/i18n              -> locale resolution, I18nProvider, useStrings/useFormat
+shared/app-settings      -> app-wide settings (language, update opt-in) and the update API adapter
 ```
+
+Every feature and shared component reads its text from a typed `strings.ts` catalog (English plus Latin American Spanish). `pnpm check:i18n` rejects hard-coded UI text; see [localization](localization.md).
+
+On the Rust side, `windows-platform::app_settings` stores language and the update opt-in, `windows-platform::i18n` holds native dialog strings, and `windows-platform::self_update` runs the opt-in updater over the existing protection network sink. Its Tauri commands are `get_update_status`, `check_for_update`, `download_update`, `install_update`, `discard_update`, `acknowledge_update_recovery`, `get_app_settings` and `set_app_settings`. See [updates](updates.md).
 
 A feature normally imports only its own files and shared code. The explicit build-artifact bridge is limited to the Cleanup and Settings composition files plus existing project-root display adapters; the architecture check pins those exact imports. Shared code cannot import app or feature code.
 

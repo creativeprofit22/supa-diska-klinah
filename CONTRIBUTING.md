@@ -26,6 +26,10 @@ Preserve `app -> windows-platform -> cleanup-core`. The core cannot acquire Taur
 
 Frontend features own their routes, state, API adapters, and screens. Shared code cannot import features or app composition, and features cannot import each other. See [`docs/architecture.md`](docs/architecture.md).
 
+## User-visible text
+
+Put every visible string, `aria-label`, `title`, `placeholder` and `alt` in the owning feature's `strings.ts`, in both `en` and `es419`. TypeScript rejects a missing Spanish key and `pnpm check:i18n` rejects hard-coded text. Spanish changes need native review before release. See [`docs/localization.md`](docs/localization.md).
+
 ## Tauri commands and parity
 
 Every new command needs boundary validation, app-manifest registration, invoke-handler registration, and the narrowest local-window capability. Never broaden content security policy or permissions to silence an error.
