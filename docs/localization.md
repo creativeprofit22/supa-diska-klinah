@@ -7,7 +7,7 @@ The app, its native Windows dialogs and its installer are available in English a
 | Locale | Language | Status |
 | --- | --- | --- |
 | `en` | English | Source language |
-| `es-419` | Español (Latinoamérica) | **Draft, pending native review.** See [review rule](#review-rule). |
+| `es-419` | Español (Latinoamérica) | **Reviewed:** accepted 2026-09-26 by the user, a Spanish speaker; no separate string-by-string pass. See [review rule](#review-rule). |
 
 The NSIS installer is built with English and Spanish (`bundle.windows.nsis.languages` in `src-tauri/tauri.conf.json`). It has no language selector and follows Windows.
 
@@ -48,4 +48,4 @@ The UI sets `<html lang>` to the active locale. Dates, numbers and sizes use loc
 
 Every `es-419` string needs review by a native Latin American Spanish speaker before a release. Machine translation is not accepted unless it has been reviewed. The same rule applies to any language added later.
 
-The current `es-419` catalog is a **draft pending native review**. The review is tracked as a manual item in [release verification](verification/release.md#manual-items).
+The current `es-419` catalog was **accepted on 2026-09-26** by the user, a Spanish speaker. The review was based on using the Spanish UI, native dialogs and installer during the release acceptance runs; no separate string-by-string pass over every catalog entry was recorded. It is tracked as a manual item in [release verification](verification/release.md#manual-items). Text changed after that date needs review again.
