@@ -13,6 +13,8 @@ pub struct ProtectionNetworkPolicy {
 pub enum NetworkPurpose {
     RuleDownload,
     PasswordBreachCheck,
+    /// Checking for and downloading app updates.
+    UpdateCheck,
 }
 
 /// Proof that the user enabled a specific network capability.
@@ -37,6 +39,7 @@ impl ProtectionNetworkPolicy {
         match purpose {
             NetworkPurpose::RuleDownload => self.rule_download,
             NetworkPurpose::PasswordBreachCheck => self.password_breach_check,
+            NetworkPurpose::UpdateCheck => false,
         }
     }
 
@@ -44,6 +47,23 @@ impl ProtectionNetworkPolicy {
     pub fn capability(&self, purpose: NetworkPurpose) -> Option<NetworkCapability> {
         self.allows(purpose).then_some(NetworkCapability {
             purpose,
+            _sealed: (),
+        })
+    }
+}
+
+/// The app-update opt-in. Kept separate from protection's policy so turning
+/// on rule downloads never enables update checks, or the reverse.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UpdateCheckPolicy {
+    pub enabled: bool,
+}
+
+impl UpdateCheckPolicy {
+    /// Mint the update capability only when the user turned update checks on.
+    pub fn capability(&self) -> Option<NetworkCapability> {
+        self.enabled.then_some(NetworkCapability {
+            purpose: NetworkPurpose::UpdateCheck,
             _sealed: (),
         })
     }
@@ -81,6 +101,27 @@ mod tests {
             policy
                 .capability(NetworkPurpose::PasswordBreachCheck)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn update_capability_is_separate_and_off_by_default() {
+        assert!(UpdateCheckPolicy::default().capability().is_none());
+        let all_protection = ProtectionNetworkPolicy {
+            rule_download: true,
+            password_breach_check: true,
+        };
+        assert!(
+            all_protection
+                .capability(NetworkPurpose::UpdateCheck)
+                .is_none()
+        );
+        assert_eq!(
+            UpdateCheckPolicy { enabled: true }
+                .capability()
+                .unwrap()
+                .purpose(),
+            NetworkPurpose::UpdateCheck
         );
     }
 

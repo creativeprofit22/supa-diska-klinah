@@ -469,11 +469,14 @@ impl<T: Transport> ProtectionService<T> {
     }
 
     /// Describe what quarantining a finding will do, for the native prompt.
-    pub fn quarantine_prompt(&self, finding_id: &str) -> Result<String, ProtectionError> {
+    pub fn quarantine_prompt(
+        &self,
+        finding_id: &str,
+        strings: &crate::i18n::NativeStrings,
+    ) -> Result<String, ProtectionError> {
         let finding = self.finding(finding_id)?;
-        Ok(format!(
-            "Move this file into quarantine?\n\n{}\n\nThe file is made non-executable and can be restored later from the Quarantine page.",
-            finding.path.display()
+        Ok((strings.quarantine_file_body)(
+            &finding.path.display().to_string(),
         ))
     }
 
@@ -506,11 +509,13 @@ impl<T: Transport> ProtectionService<T> {
         self.quarantine.list()
     }
 
-    pub fn restore_prompt(&self, id: &str) -> Result<String, ProtectionError> {
+    pub fn restore_prompt(
+        &self,
+        id: &str,
+        strings: &crate::i18n::NativeStrings,
+    ) -> Result<String, ProtectionError> {
         let target = self.quarantine.restore_target(id)?;
-        Ok(format!(
-            "Restore this file from quarantine?\n\n{target}\n\nIt becomes executable again. If a file already exists there, nothing is overwritten and the restore is cancelled."
-        ))
+        Ok((strings.restore_file_body)(&target))
     }
 
     pub fn restore(&self, id: &str) -> Result<String, ProtectionError> {
@@ -520,14 +525,16 @@ impl<T: Transport> ProtectionService<T> {
             .map_err(Into::into)
     }
 
-    pub fn delete_prompt(&self, id: &str) -> Result<String, ProtectionError> {
+    pub fn delete_prompt(
+        &self,
+        id: &str,
+        strings: &crate::i18n::NativeStrings,
+    ) -> Result<String, ProtectionError> {
         let target = self
             .quarantine
             .restore_target(id)
-            .unwrap_or_else(|_| "(damaged entry)".into());
-        Ok(format!(
-            "Permanently delete this quarantined file?\n\n{target}\n\nThis cannot be undone."
-        ))
+            .unwrap_or_else(|_| strings.damaged_quarantine_entry.into());
+        Ok((strings.delete_quarantined_body)(&target))
     }
 
     pub fn delete(&self, id: &str) -> Result<(), ProtectionError> {

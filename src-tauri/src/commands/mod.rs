@@ -1,3 +1,4 @@
+pub(crate) mod app_settings;
 pub(crate) mod browser;
 pub(crate) mod build_artifacts;
 pub(crate) mod cleaner;
@@ -18,6 +19,7 @@ pub(crate) mod protection;
 pub(crate) mod restore;
 pub(crate) mod scheduler;
 pub(crate) mod security;
+pub(crate) mod self_update;
 pub(crate) mod services;
 pub(crate) mod startup;
 pub(crate) mod storage;

@@ -609,12 +609,14 @@ impl CleanupService {
         plan_id: &str,
         owner: isize,
     ) -> Result<CleanupExecutionSummary, CleanupServiceError> {
-        self.confirm_permanent_with(plan_id, owner, |owner, text| {
+        let strings = crate::i18n::native();
+        self.confirm_permanent_with(plan_id, owner, strings, |owner, text| {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
                 IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, MessageBoxW,
             };
             let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-            let title: Vec<u16> = "Confirm permanent cleanup"
+            let title: Vec<u16> = strings
+                .confirm_permanent_cleanup_title
                 .encode_utf16()
                 .chain(Some(0))
                 .collect();
@@ -639,6 +641,7 @@ impl CleanupService {
         &self,
         plan_id: &str,
         owner: isize,
+        strings: &crate::i18n::NativeStrings,
         confirm: impl FnOnce(isize, &str) -> Result<bool, CleanupServiceError>,
     ) -> Result<CleanupExecutionSummary, CleanupServiceError> {
         if owner == 0 {
@@ -662,12 +665,8 @@ impl CleanupService {
             }
             self.validate_current_scope(&plan)?;
             let bytes = checked_sum(plan.items.iter().map(|p| p.proof.logical_bytes))?;
-            let mut text = format!(
-                "Permanently delete {} selected items ({} logical bytes)?\nNo recovery is available.\nPlan: {}\n",
-                plan.items.len(),
-                bytes,
-                plan.plan_id
-            );
+            let mut text =
+                (strings.permanent_cleanup_intro)(plan.items.len(), bytes, &plan.plan_id);
             // Bounded escaped preview; count/bytes cover the full immutable native selection.
             for item in plan.items.iter().take(8) {
                 let path: String = item
@@ -681,7 +680,7 @@ impl CleanupService {
                 text.push_str(&format!("\n{}: {}", item.item_id, path));
             }
             if plan.items.len() > 8 {
-                text.push_str("\nAdditional selected items omitted.");
+                text.push_str(strings.permanent_cleanup_omitted);
             }
             text
         };
@@ -2489,7 +2488,12 @@ mod tests {
         );
         assert_eq!(
             service
-                .confirm_permanent_with(&permanent.plan_id, 1, |_, _| panic!("replay prompted"))
+                .confirm_permanent_with(
+                    &permanent.plan_id,
+                    1,
+                    crate::i18n::strings(crate::i18n::Locale::En),
+                    |_, _| panic!("replay prompted")
+                )
                 .unwrap_err(),
             CleanupServiceError::Conflict
         );
@@ -2562,37 +2566,60 @@ mod tests {
         for id in ["invalid", &"f".repeat(32)] {
             assert!(
                 service
-                    .confirm_permanent_with(id, 1, |_, _| panic!("invalid plan prompted"))
+                    .confirm_permanent_with(
+                        id,
+                        1,
+                        crate::i18n::strings(crate::i18n::Locale::En),
+                        |_, _| panic!("invalid plan prompted")
+                    )
                     .is_err()
             );
         }
         assert!(
             service
-                .confirm_permanent_with(&plan.plan_id, 0, |_, _| panic!("zero owner prompted"))
+                .confirm_permanent_with(
+                    &plan.plan_id,
+                    0,
+                    crate::i18n::strings(crate::i18n::Locale::En),
+                    |_, _| panic!("zero owner prompted")
+                )
                 .is_err()
         );
         assert!(
             service
-                .confirm_permanent_with(&plan.plan_id, 1, |_, text| {
-                    assert!(text.contains(&plan.plan_id));
-                    assert!(text.contains(&plan.items[0].item_id));
-                    assert!(text.len() < 20000);
-                    Ok(false)
-                })
+                .confirm_permanent_with(
+                    &plan.plan_id,
+                    1,
+                    crate::i18n::strings(crate::i18n::Locale::En),
+                    |_, text| {
+                        assert!(text.contains(&plan.plan_id));
+                        assert!(text.contains(&plan.items[0].item_id));
+                        assert!(text.len() < 20000);
+                        Ok(false)
+                    }
+                )
                 .is_err()
         );
         assert!(
             service
-                .confirm_permanent_with(&plan.plan_id, 1, |_, _| Err(
-                    CleanupServiceError::OperationFailed
-                ))
+                .confirm_permanent_with(
+                    &plan.plan_id,
+                    1,
+                    crate::i18n::strings(crate::i18n::Locale::En),
+                    |_, _| Err(CleanupServiceError::OperationFailed)
+                )
                 .is_err()
         );
         assert!(path.exists());
         assert!(storage.executions().unwrap().is_empty());
         assert_eq!(
             service
-                .confirm_permanent_with(&plan.plan_id, 1, |_, _| Ok(true))
+                .confirm_permanent_with(
+                    &plan.plan_id,
+                    1,
+                    crate::i18n::strings(crate::i18n::Locale::En),
+                    |_, _| Ok(true)
+                )
                 .unwrap()
                 .items[0]
                 .state,

@@ -2,23 +2,27 @@
 //!
 //! * HTTPS only (TLS 1.2+), port 443, GET only.
 //! * Hosts and paths come from the closed [`Endpoint`] enum, never from input.
-//! * Redirects, cookies and automatic authentication are disabled.
+//! * Redirects, cookies and automatic authentication are disabled. The one
+//!   exception is the app-update installer download: GitHub release assets
+//!   always redirect, so that endpoint alone may follow exactly one redirect,
+//!   HTTPS only, to an exact host allowlist ([`RELEASE_ASSET_HOSTS`]).
 //! * Every request needs a [`NetworkCapability`] minted from an enabled
 //!   opt-in flag, and the capability's purpose must match the endpoint.
 //! * Timeouts and response sizes are bounded.
 //!
 //! `scripts/check-architecture.mjs` rejects WinHTTP or HTTP clients anywhere else.
 
-use protection_core::{NetworkCapability, NetworkPurpose};
+use protection_core::{AppVersion, NetworkCapability, NetworkPurpose};
 use windows::Win32::Networking::WinHttp::{
     INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
     WINHTTP_DISABLE_AUTHENTICATION, WINHTTP_DISABLE_COOKIES, WINHTTP_FLAG_SECURE,
     WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2, WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3,
     WINHTTP_OPTION_DISABLE_FEATURE, WINHTTP_OPTION_REDIRECT_POLICY,
     WINHTTP_OPTION_REDIRECT_POLICY_NEVER, WINHTTP_OPTION_SECURE_PROTOCOLS,
-    WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE, WinHttpCloseHandle, WinHttpConnect,
-    WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
-    WinHttpSendRequest, WinHttpSetOption, WinHttpSetTimeouts,
+    WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_STATUS_CODE,
+    WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders,
+    WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetOption,
+    WinHttpSetTimeouts,
 };
 use windows::core::{PCWSTR, w};
 
@@ -28,6 +32,23 @@ pub const RULE_PACK_HOST: &str = "raw.githubusercontent.com";
 pub const RULE_PACK_PATH: &str = "/creativeprofit22/supa-diska-klinah/rule-packs/pack.json";
 pub const RULE_SIG_PATH: &str = "/creativeprofit22/supa-diska-klinah/rule-packs/pack.sig";
 pub const PWNED_PASSWORDS_HOST: &str = "api.pwnedpasswords.com";
+/// The signed update manifest lives on a dedicated branch, served without redirects.
+pub const UPDATE_MANIFEST_HOST: &str = "raw.githubusercontent.com";
+pub const UPDATE_MANIFEST_PATH: &str = "/creativeprofit22/supa-diska-klinah/updates/update.json";
+pub const UPDATE_SIG_PATH: &str = "/creativeprofit22/supa-diska-klinah/updates/update.json.sig";
+pub const UPDATE_MANIFEST_MAX_BYTES: usize = 16 * 1024;
+/// Installers are downloaded from the release page, which redirects once to GitHub's asset CDN.
+pub const RELEASE_HOST: &str = "github.com";
+pub const RELEASE_DOWNLOAD_PREFIX: &str = "/creativeprofit22/supa-diska-klinah/releases/download/";
+/// The only hosts a release download may redirect to.
+pub const RELEASE_ASSET_HOSTS: &[&str] = &[
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com",
+];
+/// Upper bound for any installer, whatever the manifest claims.
+pub const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
+/// Longest redirect target accepted (GitHub's signed asset URLs are ~1 KB).
+const MAX_REDIRECT_CHARS: usize = 4_096;
 
 const RESOLVE_TIMEOUT_MS: i32 = 10_000;
 const CONNECT_TIMEOUT_MS: i32 = 10_000;
@@ -41,6 +62,10 @@ pub enum Endpoint {
     RuleSignature,
     /// First five uppercase hex characters of a SHA-1.
     PasswordRange([u8; 5]),
+    UpdateManifest,
+    UpdateSignature,
+    /// The NSIS installer for one release; the name is derived from the version.
+    UpdateInstaller(AppVersion),
 }
 
 impl Endpoint {
@@ -48,6 +73,9 @@ impl Endpoint {
         match self {
             Self::RulePack | Self::RuleSignature => NetworkPurpose::RuleDownload,
             Self::PasswordRange(_) => NetworkPurpose::PasswordBreachCheck,
+            Self::UpdateManifest | Self::UpdateSignature | Self::UpdateInstaller(_) => {
+                NetworkPurpose::UpdateCheck
+            }
         }
     }
 
@@ -55,6 +83,8 @@ impl Endpoint {
         match self {
             Self::RulePack | Self::RuleSignature => RULE_PACK_HOST,
             Self::PasswordRange(_) => PWNED_PASSWORDS_HOST,
+            Self::UpdateManifest | Self::UpdateSignature => UPDATE_MANIFEST_HOST,
+            Self::UpdateInstaller(_) => RELEASE_HOST,
         }
     }
 
@@ -74,6 +104,21 @@ impl Endpoint {
                     std::str::from_utf8(prefix).map_err(|_| NetError::InvalidRequest)?
                 ))
             }
+            Self::UpdateManifest => Ok(UPDATE_MANIFEST_PATH.into()),
+            Self::UpdateSignature => Ok(UPDATE_SIG_PATH.into()),
+            Self::UpdateInstaller(version) => Ok(format!(
+                "{RELEASE_DOWNLOAD_PREFIX}v{version}/{}",
+                version.installer_name()
+            )),
+        }
+    }
+
+    /// Hosts this endpoint may be redirected to (at most once). Empty means
+    /// redirects are refused, which is every endpoint except the installer.
+    pub fn redirect_hosts(&self) -> &'static [&'static str] {
+        match self {
+            Self::UpdateInstaller(_) => RELEASE_ASSET_HOSTS,
+            _ => &[],
         }
     }
 
@@ -91,6 +136,10 @@ impl Endpoint {
             Self::RulePack => protection_core::MAX_PACK_BYTES,
             Self::RuleSignature => 256,
             Self::PasswordRange(_) => 2 * 1024 * 1024,
+            Self::UpdateManifest => UPDATE_MANIFEST_MAX_BYTES,
+            Self::UpdateSignature => 256,
+            // Streamed to disk through `NetClient::download` with the manifest's size.
+            Self::UpdateInstaller(_) => 0,
         }
     }
 }
@@ -104,6 +153,10 @@ pub enum NetError {
     Unreachable,
     Status(u32),
     TooLarge,
+    /// A redirect pointed outside the allowlist, was not HTTPS, or chained.
+    BadRedirect,
+    /// Writing the downloaded bytes locally failed.
+    Storage,
 }
 
 impl std::fmt::Display for NetError {
@@ -114,6 +167,8 @@ impl std::fmt::Display for NetError {
             Self::Unreachable => f.write_str("the service could not be reached"),
             Self::Status(code) => write!(f, "the service answered with HTTP {code}"),
             Self::TooLarge => f.write_str("the response was larger than allowed"),
+            Self::BadRedirect => f.write_str("the download was redirected somewhere unexpected"),
+            Self::Storage => f.write_str("the download could not be saved"),
         }
     }
 }
@@ -128,6 +183,45 @@ pub trait Transport: Send + Sync {
         headers: &'static str,
         max_bytes: usize,
     ) -> Result<Vec<u8>, NetError>;
+
+    /// Streams one HTTPS GET into `sink`, following at most one redirect to
+    /// an exact host in `redirect_hosts`. Returns the number of bytes written.
+    /// Transports that do not support downloads refuse.
+    fn download(
+        &self,
+        _host: &'static str,
+        _path: &str,
+        _redirect_hosts: &'static [&'static str],
+        _max_bytes: u64,
+        _sink: &mut dyn std::io::Write,
+    ) -> Result<u64, NetError> {
+        Err(NetError::NotPermitted)
+    }
+}
+
+/// Validates a redirect `Location`: absolute `https://` URL, host exactly in
+/// the allowlist (no port, no user info), graphic ASCII path. Returns the
+/// allowlisted host and the path-and-query to request.
+pub fn parse_redirect(
+    location: &str,
+    allowed: &'static [&'static str],
+) -> Result<(&'static str, String), NetError> {
+    if location.len() > MAX_REDIRECT_CHARS || !location.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(NetError::BadRedirect);
+    }
+    let rest = location
+        .strip_prefix("https://")
+        .ok_or(NetError::BadRedirect)?;
+    let split = rest.find('/').ok_or(NetError::BadRedirect)?;
+    let (authority, path) = rest.split_at(split);
+    let host = allowed
+        .iter()
+        .find(|candidate| candidate.eq_ignore_ascii_case(authority))
+        .ok_or(NetError::BadRedirect)?;
+    if path.starts_with("//") || path.contains('#') || path.contains('\\') {
+        return Err(NetError::BadRedirect);
+    }
+    Ok((host, path.to_owned()))
 }
 
 /// Capability-checked front door to a transport.
@@ -152,12 +246,42 @@ impl<T: Transport> NetClient<T> {
         if capability.purpose() != endpoint.purpose() {
             return Err(NetError::NotPermitted);
         }
+        if !endpoint.redirect_hosts().is_empty() {
+            // Redirecting endpoints are streamed with `download`.
+            return Err(NetError::InvalidRequest);
+        }
         let path = endpoint.path()?;
         self.transport.get(
             endpoint.host(),
             &path,
             endpoint.headers(),
             endpoint.max_bytes(),
+        )
+    }
+
+    /// Streams a large download (the update installer) to `sink`, capped at
+    /// `max_bytes`. Only endpoints with a redirect allowlist may be downloaded.
+    pub fn download(
+        &self,
+        capability: &NetworkCapability,
+        endpoint: Endpoint,
+        max_bytes: u64,
+        sink: &mut dyn std::io::Write,
+    ) -> Result<u64, NetError> {
+        if capability.purpose() != endpoint.purpose() {
+            return Err(NetError::NotPermitted);
+        }
+        if endpoint.redirect_hosts().is_empty() || max_bytes == 0 || max_bytes > MAX_INSTALLER_BYTES
+        {
+            return Err(NetError::InvalidRequest);
+        }
+        let path = endpoint.path()?;
+        self.transport.download(
+            endpoint.host(),
+            &path,
+            endpoint.redirect_hosts(),
+            max_bytes,
+            sink,
         )
     }
 }
@@ -171,7 +295,7 @@ impl Drop for Handle {
     fn drop(&mut self) {
         if !self.0.is_null() {
             // SAFETY: each handle is closed exactly once, children before parents
-            // (declaration order in `get` guarantees reverse-drop order).
+            // (`Exchange` field order guarantees children drop before parents).
             let _ = unsafe { WinHttpCloseHandle(self.0) };
         }
     }
@@ -181,15 +305,27 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-impl Transport for SystemTransport {
-    fn get(
-        &self,
-        host: &'static str,
-        path: &str,
-        headers: &'static str,
-        max_bytes: usize,
-    ) -> Result<Vec<u8>, NetError> {
-        if !path.starts_with('/') || !path.bytes().all(|b| b.is_ascii_graphic()) {
+/// One open WinHTTP request. Fields drop in declaration order: request,
+/// then connection, then session (children before parents).
+struct Exchange {
+    request: Handle,
+    _connect: Handle,
+    _session: Handle,
+    status: u32,
+}
+
+fn valid_path(path: &str) -> bool {
+    path.starts_with('/') && path.bytes().all(|b| b.is_ascii_graphic())
+}
+
+fn is_redirect(status: u32) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+impl SystemTransport {
+    /// Sends one GET with redirects disabled and returns the open exchange.
+    fn exchange(&self, host: &str, path: &str, headers: &str) -> Result<Exchange, NetError> {
+        if !valid_path(path) {
             return Err(NetError::InvalidRequest);
         }
         let host_w = wide(host);
@@ -287,31 +423,109 @@ impl Transport for SystemTransport {
                 std::ptr::null_mut(),
             )
             .map_err(|_| NetError::Unreachable)?;
-            if status != 200 {
-                return Err(NetError::Status(status));
-            }
+            Ok(Exchange {
+                request,
+                _connect: connect,
+                _session: session,
+                status,
+            })
+        }
+    }
 
-            let mut body = Vec::new();
-            let mut chunk = vec![0_u8; 16 * 1024];
-            loop {
-                let mut read = 0_u32;
+    fn location(exchange: &Exchange) -> Result<String, NetError> {
+        let mut buffer = vec![0_u16; MAX_REDIRECT_CHARS + 1];
+        let mut size = (buffer.len() * size_of::<u16>()) as u32;
+        // SAFETY: `size` is the buffer's byte length; WinHTTP writes at most that.
+        unsafe {
+            WinHttpQueryHeaders(
+                exchange.request.0,
+                WINHTTP_QUERY_LOCATION,
+                PCWSTR::null(),
+                Some(buffer.as_mut_ptr().cast()),
+                &mut size,
+                std::ptr::null_mut(),
+            )
+        }
+        .map_err(|_| NetError::BadRedirect)?;
+        let units = (size as usize / size_of::<u16>()).min(buffer.len());
+        String::from_utf16(&buffer[..units]).map_err(|_| NetError::BadRedirect)
+    }
+
+    /// Streams the body to `sink`, failing as soon as more than `max_bytes` arrive.
+    fn read_body(
+        exchange: &Exchange,
+        max_bytes: u64,
+        sink: &mut dyn std::io::Write,
+    ) -> Result<u64, NetError> {
+        let mut total = 0_u64;
+        let mut chunk = vec![0_u8; 64 * 1024];
+        loop {
+            let mut read = 0_u32;
+            // SAFETY: the chunk is valid for `chunk.len()` bytes.
+            unsafe {
                 WinHttpReadData(
-                    request.0,
+                    exchange.request.0,
                     chunk.as_mut_ptr().cast(),
                     chunk.len() as u32,
                     &mut read,
                 )
-                .map_err(|_| NetError::Unreachable)?;
-                if read == 0 {
-                    break;
-                }
-                if body.len() + read as usize > max_bytes {
-                    return Err(NetError::TooLarge);
-                }
-                body.extend_from_slice(&chunk[..read as usize]);
             }
-            Ok(body)
+            .map_err(|_| NetError::Unreachable)?;
+            if read == 0 {
+                return Ok(total);
+            }
+            total += u64::from(read);
+            if total > max_bytes {
+                return Err(NetError::TooLarge);
+            }
+            sink.write_all(&chunk[..read as usize])
+                .map_err(|_| NetError::Storage)?;
         }
+    }
+}
+
+impl Transport for SystemTransport {
+    fn get(
+        &self,
+        host: &'static str,
+        path: &str,
+        headers: &'static str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, NetError> {
+        let exchange = self.exchange(host, path, headers)?;
+        if exchange.status != 200 {
+            return Err(NetError::Status(exchange.status));
+        }
+        let mut body = Vec::new();
+        Self::read_body(&exchange, max_bytes as u64, &mut body)?;
+        Ok(body)
+    }
+
+    fn download(
+        &self,
+        host: &'static str,
+        path: &str,
+        redirect_hosts: &'static [&'static str],
+        max_bytes: u64,
+        sink: &mut dyn std::io::Write,
+    ) -> Result<u64, NetError> {
+        let first = self.exchange(host, path, "")?;
+        let exchange = if is_redirect(first.status) {
+            let (next_host, next_path) = parse_redirect(&Self::location(&first)?, redirect_hosts)?;
+            drop(first);
+            let second = self.exchange(next_host, &next_path, "")?;
+            // Exactly one hop is allowed.
+            if is_redirect(second.status) {
+                return Err(NetError::BadRedirect);
+            }
+            second
+        } else {
+            first
+        };
+        if exchange.status != 200 {
+            return Err(NetError::Status(exchange.status));
+        }
+        Self::read_body(&exchange, max_bytes, sink)
     }
 }
 
@@ -327,6 +541,8 @@ pub(crate) mod fake {
         pub calls: AtomicUsize,
         pub requests: Mutex<Vec<(String, String, String)>>,
         pub responses: Mutex<Vec<Result<Vec<u8>, NetError>>>,
+        /// When set, `download` writes this many bytes, then drops the connection.
+        pub interrupt_after: Mutex<Option<usize>>,
     }
 
     impl CountingTransport {
@@ -370,6 +586,27 @@ pub(crate) mod fake {
                 }
             })
         }
+
+        fn download(
+            &self,
+            host: &'static str,
+            path: &str,
+            _redirect_hosts: &'static [&'static str],
+            max_bytes: u64,
+            sink: &mut dyn std::io::Write,
+        ) -> Result<u64, NetError> {
+            let body = self.get(host, path, "", usize::MAX)?;
+            if body.len() as u64 > max_bytes {
+                return Err(NetError::TooLarge);
+            }
+            if let Some(cut) = *self.interrupt_after.lock().unwrap() {
+                sink.write_all(&body[..cut.min(body.len())])
+                    .map_err(|_| NetError::Storage)?;
+                return Err(NetError::Unreachable);
+            }
+            sink.write_all(&body).map_err(|_| NetError::Storage)?;
+            Ok(body.len() as u64)
+        }
     }
 }
 
@@ -412,6 +649,117 @@ mod tests {
         assert_eq!(
             Endpoint::PasswordRange(*b"ABCDE").headers(),
             "Add-Padding: true\r\n"
+        );
+    }
+
+    fn version(text: &str) -> AppVersion {
+        AppVersion::parse(text).unwrap()
+    }
+
+    #[test]
+    fn update_endpoints_are_fixed_and_need_the_update_capability() {
+        assert_eq!(Endpoint::UpdateManifest.host(), "raw.githubusercontent.com");
+        assert_eq!(
+            Endpoint::UpdateManifest.path().unwrap(),
+            "/creativeprofit22/supa-diska-klinah/updates/update.json"
+        );
+        assert_eq!(
+            Endpoint::UpdateInstaller(version("1.2.3")).path().unwrap(),
+            "/creativeprofit22/supa-diska-klinah/releases/download/v1.2.3/Supa-Diska-Klinah_1.2.3_x64-setup.exe"
+        );
+        assert_eq!(
+            Endpoint::UpdateInstaller(version("1.2.3")).host(),
+            "github.com"
+        );
+        assert!(Endpoint::UpdateManifest.redirect_hosts().is_empty());
+        assert!(Endpoint::RulePack.redirect_hosts().is_empty());
+
+        let client = NetClient::new(CountingTransport::default());
+        let rules = ProtectionNetworkPolicy {
+            rule_download: true,
+            password_breach_check: true,
+        };
+        let cap = rules.capability(NetworkPurpose::RuleDownload).unwrap();
+        assert_eq!(
+            client.fetch(&cap, Endpoint::UpdateManifest),
+            Err(NetError::NotPermitted)
+        );
+        let update = protection_core::UpdateCheckPolicy { enabled: true }
+            .capability()
+            .unwrap();
+        assert_eq!(
+            client.fetch(&update, Endpoint::RulePack),
+            Err(NetError::NotPermitted)
+        );
+        assert_eq!(
+            client.fetch(&update, Endpoint::UpdateInstaller(version("1.0.0"))),
+            Err(NetError::InvalidRequest)
+        );
+        let mut sink = Vec::new();
+        assert_eq!(
+            client.download(&update, Endpoint::UpdateManifest, 10, &mut sink),
+            Err(NetError::InvalidRequest)
+        );
+        assert_eq!(
+            client.download(
+                &update,
+                Endpoint::UpdateInstaller(version("1.0.0")),
+                MAX_INSTALLER_BYTES + 1,
+                &mut sink
+            ),
+            Err(NetError::InvalidRequest)
+        );
+        assert_eq!(client.transport().count(), 0);
+    }
+
+    #[test]
+    fn redirects_are_limited_to_exact_https_asset_hosts() {
+        let ok = parse_redirect(
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1/abc?sp=r&sig=x%2B",
+            RELEASE_ASSET_HOSTS,
+        )
+        .unwrap();
+        assert_eq!(ok.0, "release-assets.githubusercontent.com");
+        assert!(ok.1.starts_with("/github-production-release-asset/1/abc?"));
+        assert_eq!(
+            parse_redirect(
+                "https://objects.githubusercontent.com/x",
+                RELEASE_ASSET_HOSTS
+            )
+            .unwrap()
+            .0,
+            "objects.githubusercontent.com"
+        );
+        for bad in [
+            "http://release-assets.githubusercontent.com/x",
+            "https://evil.example/x",
+            "https://release-assets.githubusercontent.com.evil.example/x",
+            "https://release-assets.githubusercontent.com:8443/x",
+            "https://user@release-assets.githubusercontent.com/x",
+            "https://release-assets.githubusercontent.com",
+            "https://objects.githubusercontent.com//evil.example/x",
+            "//release-assets.githubusercontent.com/x",
+            "/relative/path",
+            "https://release-assets.githubusercontent.com/a b",
+            "https://release-assets.githubusercontent.com/a#frag",
+        ] {
+            assert_eq!(
+                parse_redirect(bad, RELEASE_ASSET_HOSTS),
+                Err(NetError::BadRedirect),
+                "{bad}"
+            );
+        }
+        let long = format!(
+            "https://objects.githubusercontent.com/{}",
+            "a".repeat(MAX_REDIRECT_CHARS)
+        );
+        assert_eq!(
+            parse_redirect(&long, RELEASE_ASSET_HOSTS),
+            Err(NetError::BadRedirect)
+        );
+        assert_eq!(
+            parse_redirect("https://objects.githubusercontent.com/x", &[]),
+            Err(NetError::BadRedirect)
         );
     }
 

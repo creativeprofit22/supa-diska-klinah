@@ -25,7 +25,7 @@ use windows::{
             FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
         },
     },
-    core::{HRESULT, w},
+    core::HRESULT,
 };
 
 #[derive(Clone, Debug, Serialize)]
@@ -179,15 +179,15 @@ fn selected(
         .transpose()
 }
 fn pick_folder(owner: isize) -> Result<Option<PathBuf>, JobError> {
-    pick_folder_titled(owner, w!("Choose storage scan folder"))
+    pick_folder_titled(owner, crate::i18n::native().pick_storage_folder_title)
 }
 
 /// Native folder picker shared with the protection scanner. Run on a dedicated
 /// blocking thread; `owner` must come from the application's own window.
-pub(crate) fn pick_folder_titled(
-    owner: isize,
-    title: windows::core::PCWSTR,
-) -> Result<Option<PathBuf>, JobError> {
+pub(crate) fn pick_folder_titled(owner: isize, title: &str) -> Result<Option<PathBuf>, JobError> {
+    // Owned NUL-terminated UTF-16; it outlives the modal `show` call below.
+    let wide: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+    let title = windows::core::PCWSTR(wide.as_ptr());
     fn show(owner: isize, title: windows::core::PCWSTR) -> windows::core::Result<Option<PathBuf>> {
         // SAFETY: COM is initialized and balanced on this thread; all interfaces
         // drop before the apartment. The owner is supplied by the native app.

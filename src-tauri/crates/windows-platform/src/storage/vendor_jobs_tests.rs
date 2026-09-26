@@ -321,8 +321,9 @@ fn native_confirmation_seam_denial_and_pre_prompt_validation() {
         VendorJobError::RegistryChanged
     );
     *registry.command.lock().unwrap() = r"C:\Fixture\uninstall.exe /remove".into();
+    let english = crate::i18n::strings(crate::i18n::Locale::En);
     let denied = manager
-        .confirm_with(&job.job_id, |message| {
+        .confirm_with_strings(&job.job_id, english, |message| {
             assert!(message.contains("Disposable fixture"));
             assert!(message.contains(&job.job_id));
             assert!(message.contains("Vendor executable"));
@@ -357,6 +358,33 @@ fn native_confirmation_seam_denial_and_pre_prompt_validation() {
             .unwrap_err(),
         VendorJobError::Expired
     );
+    drop(manager);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn spanish_native_confirmation_is_translated_and_debug_quotes_names() {
+    let process = Process::new(0, Some(0));
+    let (manager, _, root) = setup(process.clone());
+    let job = prepare(&manager);
+    let spanish = crate::i18n::strings(crate::i18n::Locale::Es419);
+    let denied = manager
+        .confirm_with_strings(&job.job_id, spanish, |message| {
+            assert!(message.starts_with(
+                "¿Ejecutar la desinstalación del proveedor? Esto no se puede deshacer.\n"
+            ));
+            assert!(message.contains("Programa: \"Disposable fixture\"\n"));
+            assert!(message.contains(&format!("ID de trabajo: {}\n", job.job_id)));
+            assert!(message.contains("Familia: Ejecutable del proveedor\n"));
+            assert!(message.contains("Ejecutable: \"C:\\\\Fixture\\\\uninstall.exe\""));
+            assert!(message.contains("Argumentos: [\"/remove\"]"));
+            assert!(message.contains("Cancelar la espera no detiene el instalador del proveedor."));
+            assert!(!message.contains("cannot be undone"));
+            false
+        })
+        .unwrap();
+    assert_eq!(denied.state, VendorJobState::CancelledBeforeLaunch);
+    assert_eq!(process.launches.load(Ordering::Acquire), 0);
     drop(manager);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -1109,12 +1137,24 @@ fn drive_real_dialog(owner: isize, answer: i32) -> std::thread::JoinHandle<Dialo
     const DM_GETDEFID: u32 = 0x0400;
     const DC_HASDEFID: isize = 0x534B;
     std::thread::spawn(move || {
-        let title: Vec<u16> = "Confirm vendor uninstall\0".encode_utf16().collect();
+        // The title follows the active language, which is machine- and setting-dependent.
+        let titles: Vec<Vec<u16>> = [crate::i18n::Locale::En, crate::i18n::Locale::Es419]
+            .into_iter()
+            .map(|locale| {
+                crate::i18n::strings(locale)
+                    .confirm_vendor_uninstall_title
+                    .encode_utf16()
+                    .chain(Some(0))
+                    .collect()
+            })
+            .collect();
         let deadline = Instant::now() + Duration::from_secs(60);
-        let dialog = loop {
-            let found = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
-            if !found.is_null() && unsafe { GetWindow(found, GW_OWNER) } as isize == owner {
-                break found;
+        let dialog = 'found: loop {
+            for title in &titles {
+                let found = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+                if !found.is_null() && unsafe { GetWindow(found, GW_OWNER) } as isize == owner {
+                    break 'found found;
+                }
             }
             assert!(
                 Instant::now() < deadline,

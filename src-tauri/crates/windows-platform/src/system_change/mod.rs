@@ -29,6 +29,7 @@ use cleanup_core::system_change::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::NativeStrings;
 use crate::os_info::OsFacts;
 
 pub use broker_client::BrokerHelperClient;
@@ -366,9 +367,11 @@ impl SystemChangeService {
         if owner == 0 || unsafe { IsWindow(owner as _) } == 0 {
             return Err(SystemChangeError::WindowUnavailable);
         }
-        self.confirm_with(plan_id, |message| {
+        let strings = crate::i18n::native();
+        self.confirm_with_strings(plan_id, strings, |message| {
             let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
-            let title: Vec<u16> = "Confirm system changes"
+            let title: Vec<u16> = strings
+                .confirm_system_changes_title
                 .encode_utf16()
                 .chain(Some(0))
                 .collect();
@@ -389,13 +392,23 @@ impl SystemChangeService {
         plan_id: &str,
         prompt: impl FnOnce(&str) -> bool,
     ) -> Result<(), SystemChangeError> {
+        self.confirm_with_strings(plan_id, crate::i18n::native(), prompt)
+    }
+
+    /// `confirm_with` in an explicit language.
+    pub fn confirm_with_strings(
+        &self,
+        plan_id: &str,
+        strings: &NativeStrings,
+        prompt: impl FnOnce(&str) -> bool,
+    ) -> Result<(), SystemChangeError> {
         let message = {
             let plans = self.plans.lock().map_err(|_| SystemChangeError::Busy)?;
             let plan = plans.get(plan_id).ok_or(SystemChangeError::PlanNotFound)?;
             if self.now().duration_since(plan.created) >= PLAN_LIFETIME {
                 return Err(SystemChangeError::PlanExpired);
             }
-            confirmation_message(&plan.changes)
+            confirmation_message(strings, &plan.changes)
         };
         if !prompt(&message) {
             self.plans
@@ -730,24 +743,27 @@ fn map_preview_error(error: AdapterError) -> SystemChangeError {
     }
 }
 
-fn confirmation_message(changes: &[PlannedChange]) -> String {
-    let mut message = format!("Apply {} system change(s)?\n\n", changes.len());
+fn confirmation_message(strings: &NativeStrings, changes: &[PlannedChange]) -> String {
+    let mut message = (strings.system_changes_intro)(changes.len());
     for (index, change) in changes.iter().enumerate() {
         // Debug-quote so control characters in names cannot forge extra lines.
-        message.push_str(&format!("{}. {:?}\n", index + 1, change.summary_line()));
+        message.push_str(&format!(
+            "{}. {:?}\n",
+            index + 1,
+            (strings.system_change_line)(change)
+        ));
     }
     if changes
         .iter()
         .any(|change| change.privilege == Privilege::Helper)
     {
-        message
-            .push_str("\nWindows will ask for administrator approval once for the marked changes.");
+        message.push_str(strings.system_changes_admin_note);
     }
     if changes
         .iter()
         .any(|change| !change.reversibility.is_reversible())
     {
-        message.push_str("\nSome changes CANNOT be undone.");
+        message.push_str(strings.system_changes_irreversible_note);
     }
     message
 }

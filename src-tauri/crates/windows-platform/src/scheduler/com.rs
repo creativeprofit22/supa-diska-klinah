@@ -341,6 +341,79 @@ fn build_definition(
     }
 }
 
+/// Outcome of removing the app's tasks during uninstall.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UninstallCleanup {
+    pub deleted: usize,
+    /// Tasks in our folder that could not be deleted (the folder is kept then).
+    pub failed: usize,
+    pub folder_removed: bool,
+}
+
+impl ComTaskService {
+    /// Uninstall only (run by the elevated helper from the NSIS pre-uninstall
+    /// hook): deletes every task in `NAMING_SCHEME.folder` whose name matches the
+    /// app's scheme, for every user, then removes the folder if it is empty.
+    /// Tasks are enumerated by name only, so tasks this token cannot read are
+    /// still removed. Nothing outside the app's folder is touched.
+    pub fn remove_all_for_uninstall(&self) -> Result<UninstallCleanup, AdapterError> {
+        let session = Session::open()?;
+        let Some(folder) = session.folder()? else {
+            return Ok(UninstallCleanup {
+                folder_removed: true,
+                ..UninstallCleanup::default()
+            });
+        };
+        let mut outcome = UninstallCleanup::default();
+        // SAFETY: the folder is live; TASK_ENUM_HIDDEN is a documented flag.
+        let tasks = unsafe { folder.GetTasks(TASK_ENUM_HIDDEN.0) }.map_err(map_error)?;
+        // SAFETY: the collection is live.
+        let count = unsafe { tasks.Count() }.map_err(map_error)?;
+        let mut names = Vec::new();
+        let mut foreign = 0_usize;
+        for index in 1..=count.clamp(0, MAX_ENUMERATED_TASKS) {
+            // SAFETY: index is within 1..=Count of the live collection.
+            let Ok(task) = (unsafe { tasks.get_Item(&VARIANT::from(index)) }) else {
+                outcome.failed += 1;
+                continue;
+            };
+            // SAFETY: the registered task interface is live.
+            let Ok(name) = (unsafe { task.Name() }) else {
+                outcome.failed += 1;
+                continue;
+            };
+            let name = bounded(name);
+            if NAMING_SCHEME.parse_task_name(&name).is_some() {
+                names.push(name);
+            } else {
+                // Not ours: never deleted, and it keeps the folder in place.
+                foreign += 1;
+            }
+        }
+        for name in names {
+            // SAFETY: the folder is live; the name matched NAMING_SCHEME.
+            match unsafe { folder.DeleteTask(&BSTR::from(name.as_str()), 0) } {
+                Ok(()) => outcome.deleted += 1,
+                Err(error) if is_not_found(error.code()) => {}
+                Err(_) => outcome.failed += 1,
+            }
+        }
+        if outcome.failed == 0 && foreign == 0 {
+            // SAFETY: the service is connected; "\\" is the documented root path.
+            let root =
+                unsafe { session.service.GetFolder(&BSTR::from("\\")) }.map_err(map_error)?;
+            // DeleteFolder fails if anything is left, so only an empty folder goes.
+            // SAFETY: the root folder is live; the path is the fixed scheme folder.
+            outcome.folder_removed =
+                match unsafe { root.DeleteFolder(&BSTR::from(NAMING_SCHEME.folder), 0) } {
+                    Ok(()) => true,
+                    Err(error) => is_not_found(error.code()),
+                };
+        }
+        Ok(outcome)
+    }
+}
+
 impl TaskService for ComTaskService {
     fn get(&self, name: &str) -> Result<Option<RawTask>, AdapterError> {
         let session = Session::open()?;

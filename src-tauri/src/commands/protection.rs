@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use windows_platform::i18n::native;
 use windows_platform::protection::{
     ProtectionNetworkPolicy, Zeroizing,
     breach::PasswordBreachResult,
@@ -210,7 +211,12 @@ pub(crate) async fn quarantine_protection_finding<R: tauri::Runtime>(
     let owner = owner(&window)?;
     let service = Arc::clone(service.inner());
     blocking(move || {
-        native_ui::confirm(owner, "Quarantine file", &service.quarantine_prompt(&id)?)?;
+        let text = native();
+        native_ui::confirm(
+            owner,
+            text.quarantine_file_title,
+            &service.quarantine_prompt(&id, text)?,
+        )?;
         service.quarantine_finding(&id)
     })
     .await
@@ -236,7 +242,12 @@ pub(crate) async fn restore_quarantined<R: tauri::Runtime>(
     let owner = owner(&window)?;
     let service = Arc::clone(service.inner());
     blocking(move || {
-        native_ui::confirm(owner, "Restore file", &service.restore_prompt(&id)?)?;
+        let text = native();
+        native_ui::confirm(
+            owner,
+            text.restore_file_title,
+            &service.restore_prompt(&id, text)?,
+        )?;
         service.restore(&id)
     })
     .await
@@ -252,7 +263,12 @@ pub(crate) async fn delete_quarantined<R: tauri::Runtime>(
     let owner = owner(&window)?;
     let service = Arc::clone(service.inner());
     blocking(move || {
-        native_ui::confirm(owner, "Delete permanently", &service.delete_prompt(&id)?)?;
+        let text = native();
+        native_ui::confirm(
+            owner,
+            text.delete_quarantined_title,
+            &service.delete_prompt(&id, text)?,
+        )?;
         service.delete(&id)
     })
     .await
@@ -304,10 +320,11 @@ pub(crate) async fn restore_previous_rule_pack<R: tauri::Runtime>(
     let owner = owner(&window)?;
     let service = Arc::clone(service.inner());
     blocking(move || {
+        let text = native();
         native_ui::confirm(
             owner,
-            "Restore previous rule pack",
-            "Switch back to the previously installed rule pack?\n\nThe newer pack will be removed. Only do this if the newer pack causes problems.",
+            text.restore_previous_rule_pack_title,
+            text.restore_previous_rule_pack_body,
         )?;
         service.restore_previous_rules()
     })

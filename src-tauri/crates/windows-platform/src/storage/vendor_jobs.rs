@@ -387,9 +387,11 @@ impl VendorJobManager {
         if owner == 0 || unsafe { IsWindow(owner as _) } == 0 {
             return Err(VendorJobError::Conflict);
         }
-        self.confirm_with(job_id, |message| {
+        let strings = crate::i18n::native();
+        self.confirm_with_strings(job_id, strings, |message| {
             let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
-            let title: Vec<u16> = "Confirm vendor uninstall"
+            let title: Vec<u16> = strings
+                .confirm_vendor_uninstall_title
                 .encode_utf16()
                 .chain(Some(0))
                 .collect();
@@ -404,9 +406,19 @@ impl VendorJobManager {
         })
     }
 
+    #[cfg(test)]
     fn confirm_with(
         &self,
         job_id: &str,
+        prompt: impl FnOnce(&str) -> bool,
+    ) -> Result<VendorJob, VendorJobError> {
+        self.confirm_with_strings(job_id, crate::i18n::native(), prompt)
+    }
+
+    fn confirm_with_strings(
+        &self,
+        job_id: &str,
+        strings: &crate::i18n::NativeStrings,
         prompt: impl FnOnce(&str) -> bool,
     ) -> Result<VendorJob, VendorJobError> {
         let journal = {
@@ -431,17 +443,12 @@ impl VendorJobManager {
         fresh(&self.shared, &journal)?;
         // Debug quoting escapes controls, quotes and backslashes. Fail closed instead of
         // truncating the command the user is being asked to approve.
-        let message = format!(
-            "Run vendor uninstall? This cannot be undone.\nProgram: {:?}\nJob ID: {}\nFamily: {}\nExecutable: {:?}\nArguments: {:?}\n\nVendor UI/UAC may follow. Launcher exit is not proof of removal. Cancelling waiting does not terminate the vendor installer.",
-            journal.job.program_name,
-            journal.job.job_id,
-            if journal.command.msi {
-                "Windows Installer"
-            } else {
-                "Vendor executable"
-            },
-            journal.command.executable,
-            journal.command.arguments,
+        let message = (strings.vendor_uninstall_body)(
+            &journal.job.program_name,
+            &journal.job.job_id,
+            journal.command.msi,
+            &journal.command.executable,
+            &journal.command.arguments,
         );
         if message.encode_utf16().count() > 16384 {
             return Err(VendorJobError::Limit);

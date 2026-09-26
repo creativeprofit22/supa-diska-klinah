@@ -1,11 +1,13 @@
 #[cfg(not(target_os = "windows"))]
 compile_error!("windows-platform supports Windows targets only");
 
+pub mod app_settings;
 pub mod cleanup;
 pub mod drivers;
 pub mod firewall;
 pub mod history;
 pub mod hosts;
+pub mod i18n;
 pub mod optimizer;
 pub mod os_info;
 pub mod power;
@@ -15,6 +17,7 @@ pub mod protection;
 pub mod restore;
 pub mod scheduler;
 pub mod security;
+pub mod self_update;
 pub mod services;
 mod startup;
 pub mod startup_items;

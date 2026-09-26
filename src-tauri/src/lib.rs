@@ -28,6 +28,31 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     tauri::Builder::default()
         .setup(move |app| {
             let app_data = app.path().app_data_dir()?;
+            // Loaded first so native dialogs use the saved language from the start.
+            app.manage(Arc::new(
+                windows_platform::app_settings::AppSettingsService::new(&app_data),
+            ));
+            // Opt-in self-updater; a build without an update key reports that
+            // instead of failing to start.
+            let updates = Arc::new(
+                windows_platform::self_update::UpdateService::new(
+                    windows_platform::self_update::UpdateServiceConfig {
+                        app_data: app_data.clone(),
+                        running_version: app.package_info().version.to_string(),
+                        running_exe: std::env::current_exe()?,
+                        transport: windows_platform::protection::net::SystemTransport,
+                        verifier: windows_platform::self_update::embedded_verifier(),
+                        clock: windows_platform::self_update::system_clock,
+                        probe: Box::new(windows_platform::self_update::SystemProbe),
+                        launcher: Box::new(windows_platform::self_update::launch::ShellLauncher),
+                    },
+                )
+                .map_err(|_| std::io::Error::other("update staging unavailable"))?,
+            );
+            // Recovery (stale partial downloads, interrupted installs) never delays startup.
+            let recovering = Arc::clone(&updates);
+            tauri::async_runtime::spawn_blocking(move || recovering.recover_on_startup());
+            app.manage(updates);
             app.manage(Arc::new(
                 windows_platform::system_change::SystemChangeService::windows(&app_data)
                     .map_err(|_| std::io::Error::other("system change journal unavailable"))?,
@@ -92,6 +117,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::cleanup::set_auto_cleanup_policy,
             commands::cleanup::get_scan_settings,
             commands::cleanup::set_scan_settings,
+            commands::app_settings::get_app_settings,
+            commands::app_settings::set_app_settings,
+            commands::self_update::get_update_status,
+            commands::self_update::check_for_update,
+            commands::self_update::download_update,
+            commands::self_update::install_update,
+            commands::self_update::discard_update,
+            commands::self_update::acknowledge_update_recovery,
             commands::build_artifacts::list_build_profiles,
             commands::build_artifacts::register_build_profile,
             commands::build_artifacts::remove_build_profile,

@@ -24,4 +24,4 @@ pub use storage::{
     ArtifactBudgetPolicy, AutoCleanupPolicy, BuildEcosystem, BuildProfile, CleanupDisposition,
     ProjectBudgetOverride, ProjectBudgetPolicy, ProjectRoot, RegisteredArtifactPath,
 };
-pub(crate) use storage::{CleanupStorage, StorageError};
+pub(crate) use storage::{CleanupStorage, StorageError, read_json, write_json};

@@ -303,15 +303,83 @@ fn confirmation_lists_every_change_with_reversibility_and_escapes_names() {
         .unwrap();
     let mut shown = String::new();
     h.service
-        .confirm_with(&ticket.plan_id, |message| {
-            shown = message.to_owned();
-            true
-        })
+        .confirm_with_strings(
+            &ticket.plan_id,
+            crate::i18n::strings(crate::i18n::Locale::En),
+            |message| {
+                shown = message.to_owned();
+                true
+            },
+        )
         .unwrap();
     assert!(shown.contains("Apply 3 system change(s)?"));
     assert!(shown.contains("1. ") && shown.contains("2. ") && shown.contains("3. "));
     assert!(shown.contains("CANNOT be undone"));
     assert!(shown.contains("administrator approval once"));
+}
+
+#[test]
+fn spanish_confirmation_is_translated_and_still_escapes_names() {
+    let h = harness();
+    let normal = user_startup("App", false);
+    let hostile = user_startup("Evil\u{202e}name", false);
+    let driver = SystemChange::DeleteDriverPackage {
+        published_name: DriverPackageName::parse("oem12.inf").unwrap(),
+    };
+    h.system.set(&normal, PriorState::Enabled { enabled: true });
+    h.system
+        .set(&hostile, PriorState::Enabled { enabled: true });
+    h.system
+        .set(&driver, PriorState::DriverPackage { present: true });
+    let ticket = h
+        .service
+        .create_plan(vec![normal, hostile, driver])
+        .unwrap();
+    let mut shown = String::new();
+    h.service
+        .confirm_with_strings(
+            &ticket.plan_id,
+            crate::i18n::strings(crate::i18n::Locale::Es419),
+            |message| {
+                shown = message.to_owned();
+                false
+            },
+        )
+        .unwrap_err();
+    assert!(shown.starts_with("¿Aplicar 3 cambio(s) del sistema?\n\n"));
+    assert!(shown.contains("1. \"") && shown.contains("2. \"") && shown.contains("3. \""));
+    assert!(shown.contains("NO se puede deshacer"));
+    assert!(shown.contains("requiere administrador"));
+    assert!(shown.contains("aprobación de administrador una sola vez"));
+    assert!(shown.ends_with("\nAlgunos cambios NO se pueden deshacer."));
+    assert!(!shown.contains("can be undone") && !shown.contains("Apply "));
+}
+
+#[test]
+fn confirmation_debug_quotes_names_in_every_language() {
+    let change = PlannedChange::new(
+        user_startup("App", false),
+        ImpactSummary {
+            component: "Evil\u{202e}name\n2. forged".into(),
+            ..impact()
+        },
+        PriorState::Enabled { enabled: true },
+    )
+    .unwrap();
+    for locale in [crate::i18n::Locale::En, crate::i18n::Locale::Es419] {
+        let shown =
+            confirmation_message(crate::i18n::strings(locale), std::slice::from_ref(&change));
+        assert!(
+            shown.contains("1. \"Evil\\u{202e}name\\n2. forged: "),
+            "{shown}"
+        );
+        assert!(!shown.contains('\u{202e}') && !shown.contains("\n2. "));
+    }
+    let english = confirmation_message(crate::i18n::strings(crate::i18n::Locale::En), &[change]);
+    assert_eq!(
+        english,
+        "Apply 1 system change(s)?\n\n1. \"Evil\\u{202e}name\\n2. forged: Changes a test value (can be undone)\"\n"
+    );
 }
 
 #[test]

@@ -16,7 +16,8 @@ use windows_sys::Win32::Foundation::{
     TRUST_E_SUBJECT_FORM_UNKNOWN,
 };
 use windows_sys::Win32::Security::Cryptography::{
-    CERT_NAME_SIMPLE_DISPLAY_TYPE, CertGetNameStringW,
+    CERT_CONTEXT, CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_SHA1_HASH_PROP_ID,
+    CertGetCertificateContextProperty, CertGetNameStringW,
 };
 use windows_sys::Win32::Security::WinTrust::{
     WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_FILE_INFO,
@@ -53,12 +54,84 @@ pub(crate) fn classify_trust_result(code: i32) -> SignerStatus {
 }
 
 fn verify_uncached(path: &Path) -> SignerStatus {
-    let Ok(wide_path) = wide(path.as_os_str()) else {
-        return SignerStatus::Unavailable;
+    with_trust_state(path, None, |code, data| {
+        let mut status = classify_trust_result(code);
+        if let SignerStatus::Valid { subject, microsoft } = &mut status {
+            // SAFETY: state data is valid for the duration of this callback.
+            *subject = unsafe { signer_subject(data) }.unwrap_or_default();
+            *microsoft = MICROSOFT_SUBJECTS.contains(&subject.as_str());
+        }
+        status
+    })
+    .unwrap_or(SignerStatus::Unavailable)
+}
+
+/// Authenticode verdict with the signer certificate's SHA-1 thumbprint, used
+/// to pin update installers to the running app's (or the manifest's) signer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AuthenticodeVerdict {
+    Unsigned,
+    /// Trusted signature; `thumbprint` is 40 uppercase hex characters.
+    Valid {
+        thumbprint: String,
+    },
+    /// A signature is present but broken, untrusted, or the file is not a
+    /// signable image.
+    Invalid,
+    /// The file could not be evaluated (I/O, provider or policy failure).
+    Unavailable,
+}
+
+/// Evaluates `path` offline and reports the leaf signer thumbprint. When
+/// `file` is given, `WinVerifyTrust` reads through that handle so the verdict
+/// covers exactly the bytes the caller holds open.
+pub fn signer_thumbprint(path: &Path, file: Option<&std::fs::File>) -> AuthenticodeVerdict {
+    use std::os::windows::io::AsRawHandle;
+    // Without a caller handle, open one: a file that cannot be opened is not a
+    // signature verdict (WinVerifyTrust reports missing files inconsistently
+    // across Windows builds), and verifying through a handle pins the bytes.
+    let owned;
+    let file = match file {
+        Some(file) => file,
+        None => match std::fs::File::open(path) {
+            Ok(opened) => {
+                owned = opened;
+                &owned
+            }
+            Err(_) => return AuthenticodeVerdict::Unavailable,
+        },
     };
+    let handle = Some(file.as_raw_handle());
+    with_trust_state(path, handle, |code, data| {
+        match classify_trust_result(code) {
+            SignerStatus::Valid { .. } => {
+                // SAFETY: state data is valid for the duration of this callback.
+                unsafe { signer_certificate(data) }
+                    .and_then(|cert| unsafe { certificate_sha1(cert) })
+                    .map_or(AuthenticodeVerdict::Unavailable, |thumbprint| {
+                        AuthenticodeVerdict::Valid { thumbprint }
+                    })
+            }
+            SignerStatus::Unsigned => AuthenticodeVerdict::Unsigned,
+            SignerStatus::Unavailable => AuthenticodeVerdict::Unavailable,
+            SignerStatus::Invalid | SignerStatus::NotApplicable => AuthenticodeVerdict::Invalid,
+        }
+    })
+    .unwrap_or(AuthenticodeVerdict::Unavailable)
+}
+
+/// Runs `WinVerifyTrust` (verify), hands the result code and live state to
+/// `inspect`, then always closes the state. `None` when the path is unusable.
+fn with_trust_state<R>(
+    path: &Path,
+    handle: Option<std::os::windows::io::RawHandle>,
+    inspect: impl FnOnce(i32, &WINTRUST_DATA) -> R,
+) -> Option<R> {
+    let wide_path = wide(path.as_os_str()).ok()?;
     let mut file_info = WINTRUST_FILE_INFO {
         cbStruct: size_of::<WINTRUST_FILE_INFO>() as u32,
         pcwszFilePath: wide_path.as_ptr(),
+        hFile: handle.unwrap_or(std::ptr::null_mut()),
         ..Default::default()
     };
     let mut data = WINTRUST_DATA {
@@ -75,20 +148,16 @@ fn verify_uncached(path: &Path) -> SignerStatus {
     // SAFETY: `data` and `file_info` are fully initialized and outlive both calls;
     // the verify state is always released with WTD_STATEACTION_CLOSE.
     let code = unsafe { WinVerifyTrust(std::ptr::null_mut(), &mut action, (&raw mut data).cast()) };
-    let mut status = classify_trust_result(code);
-    if let SignerStatus::Valid { subject, microsoft } = &mut status {
-        // SAFETY: state data is valid until CLOSE below; each pointer is null-checked.
-        *subject = unsafe { signer_subject(&data) }.unwrap_or_default();
-        *microsoft = MICROSOFT_SUBJECTS.contains(&subject.as_str());
-    }
+    let result = inspect(code, &data);
     data.dwStateAction = WTD_STATEACTION_CLOSE;
     // SAFETY: closes the state opened by the verify call above.
     unsafe { WinVerifyTrust(std::ptr::null_mut(), &mut action, (&raw mut data).cast()) };
-    status
+    Some(result)
 }
 
-unsafe fn signer_subject(data: &WINTRUST_DATA) -> Option<String> {
-    // SAFETY: caller guarantees the state handle is live.
+/// Leaf signer certificate from a live verify state.
+unsafe fn signer_certificate(data: &WINTRUST_DATA) -> Option<*const CERT_CONTEXT> {
+    // SAFETY: caller guarantees the state handle is live; each pointer is null-checked.
     unsafe {
         let provider = WTHelperProvDataFromStateData(data.hWVTStateData);
         if provider.is_null() {
@@ -102,9 +171,33 @@ unsafe fn signer_subject(data: &WINTRUST_DATA) -> Option<String> {
         if cert.is_null() || (*cert).pCert.is_null() {
             return None;
         }
+        Some((*cert).pCert)
+    }
+}
+
+/// Uppercase hex SHA-1 hash of a certificate (its thumbprint).
+unsafe fn certificate_sha1(cert: *const CERT_CONTEXT) -> Option<String> {
+    let mut hash = [0_u8; 20];
+    let mut len = hash.len() as u32;
+    // SAFETY: `cert` is a live certificate context; the buffer holds `len` bytes.
+    let ok = unsafe {
+        CertGetCertificateContextProperty(
+            cert,
+            CERT_SHA1_HASH_PROP_ID,
+            hash.as_mut_ptr().cast(),
+            &mut len,
+        )
+    };
+    (ok != 0 && len == 20).then(|| hash.iter().map(|byte| format!("{byte:02X}")).collect())
+}
+
+unsafe fn signer_subject(data: &WINTRUST_DATA) -> Option<String> {
+    // SAFETY: caller guarantees the state handle is live.
+    unsafe {
+        let cert = signer_certificate(data)?;
         let mut buffer = [0_u16; 256];
         let written = CertGetNameStringW(
-            (*cert).pCert,
+            cert,
             CERT_NAME_SIMPLE_DISPLAY_TYPE,
             0,
             std::ptr::null(),
@@ -210,6 +303,23 @@ mod tests {
             SignerCache::default().verify(&fake),
             SignerStatus::Valid { .. }
         ));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn thumbprint_verdicts_fail_closed_for_unsigned_and_missing_files() {
+        let dir = temp_dir("authenticode-thumbprint");
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(signer_thumbprint(&exe, None), AuthenticodeVerdict::Unsigned);
+        let held = std::fs::File::open(&exe).unwrap();
+        assert_eq!(
+            signer_thumbprint(&exe, Some(&held)),
+            AuthenticodeVerdict::Unsigned
+        );
+        assert_eq!(
+            signer_thumbprint(&dir.join("missing.exe"), None),
+            AuthenticodeVerdict::Unavailable
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

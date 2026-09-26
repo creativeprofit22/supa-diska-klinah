@@ -2,26 +2,28 @@
 
 use std::path::PathBuf;
 
-use windows::core::w;
-
 use super::service::ProtectionError;
 
 /// Native folder picker for a folder scan. Must run on a blocking thread.
 pub fn pick_scan_folder(owner: isize) -> Result<Option<PathBuf>, ProtectionError> {
-    crate::storage::root_picker::pick_folder_titled(owner, w!("Choose a folder to scan"))
-        .map_err(|_| ProtectionError::WindowUnavailable)
+    crate::storage::root_picker::pick_folder_titled(
+        owner,
+        crate::i18n::native().pick_scan_folder_title,
+    )
+    .map_err(|_| ProtectionError::WindowUnavailable)
 }
 
 /// Native folder picker for a rule-pack import (folder holding pack.json + pack.sig).
 pub fn pick_rule_pack_folder(owner: isize) -> Result<Option<PathBuf>, ProtectionError> {
     crate::storage::root_picker::pick_folder_titled(
         owner,
-        w!("Choose the folder containing pack.json and pack.sig"),
+        crate::i18n::native().pick_rule_pack_folder_title,
     )
     .map_err(|_| ProtectionError::WindowUnavailable)
 }
 
-/// Yes/No confirmation owned by the app window, defaulting to No.
+/// Yes/No confirmation owned by the app window, defaulting to No. Callers pass
+/// `title`/`message` from `crate::i18n::NativeStrings`.
 pub fn confirm(owner: isize, title: &str, message: &str) -> Result<(), ProtectionError> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         IDYES, IsWindow, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, MessageBoxW,

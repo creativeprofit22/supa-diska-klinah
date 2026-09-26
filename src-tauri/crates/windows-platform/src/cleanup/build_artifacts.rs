@@ -149,28 +149,26 @@ pub struct NativeProfileApprover;
 
 impl ProfileApprover for NativeProfileApprover {
     fn approve(&self, profile: &BuildProfile) -> Result<bool, BuildArtifactError> {
-        let mut message = format!(
-            "Allow this repeatable build profile?\n\nExecutable:\n{}\n\nArguments:",
-            profile.executable
-        );
+        let strings = crate::i18n::native();
+        let mut message = (strings.build_profile_intro)(&profile.executable);
         if profile.argv.is_empty() {
-            message.push_str("\n(none)");
+            message.push_str(strings.build_profile_no_arguments);
         } else {
             for argument in &profile.argv {
                 message.push_str("\n• ");
                 message.push_str(argument);
             }
         }
-        message.push_str("\n\nWorking directory:\n");
+        message.push_str(strings.build_profile_working_directory);
         message.push_str(&profile.working_directory);
-        message.push_str("\n\nArtifact paths:");
+        message.push_str(strings.build_profile_artifact_paths);
         for artifact in &profile.artifact_paths {
             message.push_str("\n• ");
             message.push_str(&artifact.relative_path);
         }
         let message =
             wide(OsStr::new(&message)).map_err(|_| BuildArtifactError::OperationFailed)?;
-        let title = wide(OsStr::new("Approve build profile"))
+        let title = wide(OsStr::new(strings.approve_build_profile_title))
             .map_err(|_| BuildArtifactError::OperationFailed)?;
         // SAFETY: both strings are valid, NUL-terminated UTF-16 and no owner handle is required.
         let result = unsafe {

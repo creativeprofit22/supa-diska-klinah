@@ -1122,7 +1122,7 @@ fn valid_limits(limits: BudgetLimits) -> bool {
     limits.maximum_allocated_bytes != Some(0) && limits.maximum_age_seconds != Some(0)
 }
 
-fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, StorageError> {
+pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, StorageError> {
     let file = File::open(path).map_err(|_| StorageError::Io)?;
     if file.metadata().map_err(|_| StorageError::Io)?.len() > MAX_RECORD_BYTES {
         return Err(StorageError::TooLarge);
@@ -1137,7 +1137,11 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, StorageError> {
     serde_json::from_slice(&bytes).map_err(|_| StorageError::Invalid)
 }
 
-fn write_json<T: Serialize>(path: &Path, value: &T, replace: bool) -> Result<(), StorageError> {
+pub(crate) fn write_json<T: Serialize>(
+    path: &Path,
+    value: &T,
+    replace: bool,
+) -> Result<(), StorageError> {
     let bytes = serde_json::to_vec(value).map_err(|_| StorageError::Invalid)?;
     if bytes.len() as u64 > MAX_RECORD_BYTES {
         return Err(StorageError::TooLarge);

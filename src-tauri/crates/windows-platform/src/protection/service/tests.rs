@@ -269,9 +269,19 @@ fn findings_are_addressed_by_opaque_ids_through_quarantine_and_restore() {
     );
     assert!(
         service
-            .quarantine_prompt(&finding.id)
+            .quarantine_prompt(&finding.id, crate::i18n::strings(crate::i18n::Locale::En))
             .unwrap()
             .contains("invoice.pdf.exe")
+    );
+    let spanish = service
+        .quarantine_prompt(
+            &finding.id,
+            crate::i18n::strings(crate::i18n::Locale::Es419),
+        )
+        .unwrap();
+    assert!(
+        spanish.starts_with("¿Mover este archivo a cuarentena?")
+            && spanish.contains("invoice.pdf.exe")
     );
     let entry = service.quarantine_finding(&finding.id).unwrap();
     assert!(!file.exists());
@@ -286,9 +296,15 @@ fn findings_are_addressed_by_opaque_ids_through_quarantine_and_restore() {
     );
     assert!(
         service
-            .restore_prompt(&entry.id)
+            .restore_prompt(&entry.id, crate::i18n::strings(crate::i18n::Locale::En))
             .unwrap()
             .contains("nothing is overwritten")
+    );
+    assert!(
+        service
+            .restore_prompt(&entry.id, crate::i18n::strings(crate::i18n::Locale::Es419))
+            .unwrap()
+            .contains("no se sobrescribe nada")
     );
     assert_eq!(service.restore(&entry.id).unwrap(), file.to_string_lossy());
     assert_eq!(fs::read(&file).unwrap(), b"pretend program");
