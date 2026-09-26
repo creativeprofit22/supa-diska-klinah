@@ -1,0 +1,15 @@
+[package]
+name = "protection-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.90"
+license = "MIT"
+description = "Platform-neutral rule packs, matching, heuristics and evidence for local-first protection"
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+aho-corasick = { version = "=1.1.5", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std"] }

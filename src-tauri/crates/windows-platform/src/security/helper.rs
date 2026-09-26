@@ -13,6 +13,7 @@ use super::{
         write_json_frame,
     },
     restore_point::RestorePointBackend,
+    system_changes::{SystemChangeBackend, apply_batch, validate_batch},
 };
 use crate::privilege::{PrivilegeProbe, ProcessPrivilege};
 
@@ -46,14 +47,16 @@ impl HelperArguments {
 pub fn run(
     args: impl IntoIterator<Item = OsString>,
     backend: &impl RestorePointBackend,
+    changes: &impl SystemChangeBackend,
 ) -> io::Result<()> {
-    run_with(args, &ProcessPrivilege, backend)
+    run_with(args, &ProcessPrivilege, backend, changes)
 }
 
 pub fn run_with(
     args: impl IntoIterator<Item = OsString>,
     privilege: &impl PrivilegeProbe,
     backend: &impl RestorePointBackend,
+    changes: &impl SystemChangeBackend,
 ) -> io::Result<()> {
     let arguments = HelperArguments::parse(args)?;
     let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, arguments.port);
@@ -79,7 +82,7 @@ pub fn run_with(
             return Err(error);
         }
     };
-    let response = dispatch(request, privilege, backend);
+    let response = dispatch(request, privilege, backend, changes);
     write_json_frame(&mut stream, &response)
 }
 
@@ -87,6 +90,7 @@ pub fn dispatch(
     request: RequestEnvelope,
     privilege: &impl PrivilegeProbe,
     backend: &impl RestorePointBackend,
+    changes: &impl SystemChangeBackend,
 ) -> ResponseEnvelope {
     let request_id = request.request_id.clone();
     let response = match unix_time()
@@ -102,11 +106,21 @@ pub fn dispatch(
                     .map_err(|_| HelperErrorCode::InvalidRequest)?;
                 backend
                     .create(&description)
-                    .map(|sequence_number| CreateSystemRestorePointResult { sequence_number })
+                    .map(|sequence_number| PrivilegedResponse::Success {
+                        result: CreateSystemRestorePointResult { sequence_number },
+                    })
                     .map_err(map_restore_point_error)
             }
+            PrivilegedOperation::ApplySystemChanges { changes: items } => {
+                if !validate_batch(&items) {
+                    return Err(HelperErrorCode::InvalidRequest);
+                }
+                Ok(PrivilegedResponse::SystemChangesApplied {
+                    results: apply_batch(&items, changes),
+                })
+            }
         }) {
-        Ok(result) => PrivilegedResponse::Success { result },
+        Ok(response) => response,
         Err(code) => PrivilegedResponse::Error { code },
     };
     ResponseEnvelope {
@@ -142,7 +156,44 @@ mod tests {
             restore_point::RestorePointError,
         },
     };
+    use crate::{
+        security::system_changes::{HelperChange, HelperChangeItem},
+        system_change::AdapterError,
+    };
+    use cleanup_core::system_change::{ChangeOutcome, PriorState};
     use std::{cell::Cell, io};
+
+    struct CountingChanges(Cell<u32>);
+
+    impl SystemChangeBackend for CountingChanges {
+        fn observe(&self, _change: &HelperChange) -> Result<PriorState, AdapterError> {
+            Ok(PriorState::Enabled { enabled: true })
+        }
+
+        fn apply(&self, _change: &HelperChange) -> Result<(), AdapterError> {
+            self.0.set(self.0.get() + 1);
+            Ok(())
+        }
+    }
+
+    fn changes() -> CountingChanges {
+        CountingChanges(Cell::new(0))
+    }
+
+    fn batch(items: Vec<HelperChangeItem>) -> RequestEnvelope {
+        RequestEnvelope::new(
+            [5; REQUEST_ID_BYTES],
+            PrivilegedOperation::ApplySystemChanges { changes: items },
+        )
+        .unwrap()
+    }
+
+    fn hibernate_off() -> HelperChangeItem {
+        HelperChangeItem {
+            change: HelperChange::SetHibernation { enabled: false },
+            expected_prior: PriorState::Enabled { enabled: true },
+        }
+    }
 
     struct FixedPrivilege(bool);
 
@@ -185,8 +236,22 @@ mod tests {
     #[test]
     fn unelevated_dispatch_is_rejected_before_backend_access() {
         let backend = CountingBackend(Cell::new(0));
-        let response = dispatch(request(), &FixedPrivilege(false), &backend);
+        let response = dispatch(request(), &FixedPrivilege(false), &backend, &changes());
         assert_eq!(backend.0.get(), 0);
+        assert!(matches!(
+            response.response,
+            PrivilegedResponse::Error {
+                code: HelperErrorCode::PrivilegeFailure
+            }
+        ));
+        let system = changes();
+        let response = dispatch(
+            batch(vec![hibernate_off()]),
+            &FixedPrivilege(false),
+            &backend,
+            &system,
+        );
+        assert_eq!(system.0.get(), 0);
         assert!(matches!(
             response.response,
             PrivilegedResponse::Error {
@@ -196,12 +261,57 @@ mod tests {
     }
 
     #[test]
+    fn elevated_batch_returns_one_result_per_change() {
+        let system = changes();
+        let mut already = hibernate_off();
+        already.change = HelperChange::SetHibernation { enabled: true };
+        let response = dispatch(
+            batch(vec![hibernate_off(), already]),
+            &FixedPrivilege(true),
+            &CountingBackend(Cell::new(0)),
+            &system,
+        );
+        let PrivilegedResponse::SystemChangesApplied { results } = response.response else {
+            panic!("expected batch results");
+        };
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.outcome)
+                .collect::<Vec<_>>(),
+            [ChangeOutcome::Applied, ChangeOutcome::AlreadyApplied]
+        );
+        assert_eq!(system.0.get(), 1);
+    }
+
+    #[test]
+    fn empty_or_oversized_batches_are_rejected_before_system_access() {
+        for items in [vec![], vec![hibernate_off(); 33]] {
+            let system = changes();
+            let response = dispatch(
+                batch(items),
+                &FixedPrivilege(true),
+                &CountingBackend(Cell::new(0)),
+                &system,
+            );
+            assert_eq!(system.0.get(), 0);
+            assert!(matches!(
+                response.response,
+                PrivilegedResponse::Error {
+                    code: HelperErrorCode::InvalidRequest
+                }
+            ));
+        }
+    }
+
+    #[test]
     fn restore_point_backend_failures_use_one_non_sensitive_code() {
         for error in [
             RestorePointError::Windows(io::Error::other("sensitive OS detail")),
             RestorePointError::Com(-1),
             RestorePointError::Status(5),
             RestorePointError::MissingEntryPoint,
+            RestorePointError::NotCreated,
         ] {
             assert_eq!(
                 map_restore_point_error(error),
@@ -213,7 +323,7 @@ mod tests {
     #[test]
     fn elevated_dispatch_executes_exactly_one_allowlisted_operation() {
         let backend = CountingBackend(Cell::new(0));
-        let response = dispatch(request(), &FixedPrivilege(true), &backend);
+        let response = dispatch(request(), &FixedPrivilege(true), &backend, &changes());
         assert_eq!(backend.0.get(), 1);
         assert!(matches!(
             response.response,
@@ -227,7 +337,7 @@ mod tests {
         let mut stale = request();
         stale.issued_at = 1;
         stale.expires_at = 1 + AUTHORIZATION_LIFETIME_SECONDS;
-        let response = dispatch(stale, &FixedPrivilege(true), &backend);
+        let response = dispatch(stale, &FixedPrivilege(true), &backend, &changes());
         assert_eq!(backend.0.get(), 0);
         assert!(matches!(
             response.response,

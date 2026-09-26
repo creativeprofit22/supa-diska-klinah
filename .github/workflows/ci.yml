@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: Build the signed Windows release
+        description: Build the Windows release (publishing still requires a v* tag)
         required: false
         type: boolean
         default: false
@@ -19,10 +19,14 @@ jobs:
     name: Quality
     runs-on: windows-2025
     timeout-minutes: 45
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
         # actions/checkout v4.2.2
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         # actions/setup-node v4.4.0
@@ -41,6 +45,9 @@ jobs:
         run: rustup show
         working-directory: src-tauri
 
+      - name: Check assigned strict development and preview ports
+        run: pnpm check:ports
+
       - name: Check immutable dependency pins
         run: pnpm check:dependencies
 
@@ -55,6 +62,15 @@ jobs:
 
       - name: Check documentation links
         run: pnpm check:docs
+
+      - name: Check localized UI text
+        run: pnpm check:i18n
+
+      - name: Check contrast, text sizing and reduced motion
+        run: pnpm check:a11y
+
+      - name: Audit production npm dependencies
+        run: pnpm audit --audit-level high --prod
 
       - name: Test frontend
         run: pnpm test
@@ -80,6 +96,24 @@ jobs:
         run: cargo test --workspace --locked
         working-directory: src-tauri
 
+      - name: Test duplicate keeper external-process race
+        timeout-minutes: 5
+        shell: pwsh
+        env:
+          RUSTUP_TOOLCHAIN: "1.90.0"
+        # Reuse the workspace test target; the driver keeps its locked precompile
+        # outside the bounded race handshake. No privileged smoke helper is used.
+        run: |
+          $global:LASTEXITCODE = $null
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-duplicate-keeper.ps1
+          $driverExit = $LASTEXITCODE
+          if ($null -eq $driverExit) {
+            Write-Host 'Duplicate keeper driver did not run; failing closed.'
+            exit 1
+          }
+          Write-Host "Duplicate keeper driver exit code: $driverExit"
+          exit $driverExit
+
   native-smoke:
     name: Native smoke (${{ matrix.architecture }})
     strategy:
@@ -94,10 +128,14 @@ jobs:
             target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
         # actions/checkout v4.2.2
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         # actions/setup-node v4.4.0
@@ -119,9 +157,66 @@ jobs:
       - name: Build native debug executable
         run: pnpm tauri build --debug --no-bundle --target ${{ matrix.target }}
 
-      - name: Verify native project discovery as standard user
+      # One owned standard-user lifecycle runs both the project discovery smoke and
+      # the expanded storage smoke against the executable just built for this target.
+      - name: Verify native project discovery and storage workflows as standard user
         shell: pwsh
-        run: ./scripts/smoke-native-ci.ps1 -Target ${{ matrix.target }} -BuildRevision $env:GITHUB_SHA -ArtifactDirectory "artifacts/native-smoke/${{ matrix.target }}"
+        run: ./scripts/smoke-native-ci.ps1 -Target ${{ matrix.target }} -StorageSmoke -BuildRevision $env:GITHUB_SHA -ArtifactDirectory "artifacts/native-smoke/${{ matrix.target }}"
+
+      # Renderer replay needs the runner's already-installed Edge, which only the x64
+      # image provides. It owns its own strict preview on 1521 and no other process.
+      - name: Replay actual storage routes in the preview browser
+        if: matrix.architecture == 'x64'
+        timeout-minutes: 20
+        shell: pwsh
+        run: |
+          $edge = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'
+          if (-not (Test-Path -LiteralPath $edge)) {
+            Write-Host 'Installed Edge is required for the actual-route replay; failing closed.'
+            exit 1
+          }
+          $preview = Start-Process -FilePath 'pnpm.cmd' -ArgumentList 'preview' -PassThru -WindowStyle Hidden
+          $replayExit = $null
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 120; $attempt++) {
+              if ($preview.HasExited) {
+                throw "Owned preview exited with code $($preview.ExitCode) instead of serving strict port 1521."
+              }
+              try {
+                $client = [Net.Sockets.TcpClient]::new('127.0.0.1', 1521)
+                $client.Dispose()
+                $ready = $true
+                break
+              }
+              catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $ready) { throw 'Owned preview never bound strict port 1521.' }
+            $global:LASTEXITCODE = $null
+            node scripts/smoke-storage-frontend.mjs --remaining
+            $replayExit = $LASTEXITCODE
+          }
+          finally {
+            if (-not $preview.HasExited) {
+              # Only the preview this step started; no unrelated listener is touched.
+              & "$env:SystemRoot\System32\taskkill.exe" /PID $preview.Id /T /F | Out-Null
+              $preview.WaitForExit(10000) | Out-Null
+            }
+            $preview.Dispose()
+          }
+          $destination = "artifacts/native-smoke/${{ matrix.target }}/storage-frontend"
+          New-Item -ItemType Directory -Path $destination -Force | Out-Null
+          if (Test-Path -LiteralPath '.gg/smoke-artifacts/remaining-storage-routes') {
+            Copy-Item -Path '.gg/smoke-artifacts/remaining-storage-routes/*' -Destination $destination -Recurse -Force
+          }
+          if ($null -eq $replayExit) {
+            Write-Host 'Storage route replay did not report an exit code; failing closed.'
+            exit 1
+          }
+          Write-Host "Storage route replay exit code: $replayExit"
+          exit $replayExit
 
       - name: Upload native smoke evidence
         if: always()
@@ -132,17 +227,55 @@ jobs:
           path: artifacts/native-smoke/${{ matrix.target }}
           if-no-files-found: warn
 
-  windows-release:
-    name: Signed Windows release
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)
-    needs: [quality, native-smoke]
-    environment: windows-release
-    runs-on: windows-2025
-    timeout-minutes: 90
+  dependency-audit:
+    name: Rust dependency policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
         # actions/checkout v4.2.2
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      # Advisories, yanked crates, licences and sources (crates.io only); src-tauri/deny.toml.
+      - name: Check Rust advisories, licences and sources
+        # EmbarkStudios/cargo-deny-action v2.1.1
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          # --config is a top-level cargo-deny flag (not a `check` flag); relative to the workspace root.
+          arguments: --locked --config src-tauri/deny.toml
+
+  # Release, stage 1: build and verify in the declared signing mode, then attest.
+  # Nothing is published here. Stage 2 runs only if every step below passed.
+  windows-release-build:
+    name: Windows release build (${{ vars.WINDOWS_SIGNING_MODE || 'mode not set' }})
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)
+    needs: [quality, native-smoke, dependency-audit]
+    environment: windows-release
+    runs-on: windows-2025
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      SIGNING_MODE: ${{ vars.WINDOWS_SIGNING_MODE }}
+    steps:
+      - name: Check out repository
+        # actions/checkout v4.2.2
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      # Fail closed before any build step: the mode must be declared exactly and
+      # must match the committed docs marker, so docs never misdescribe a release.
+      - name: Validate declared signing mode
+        shell: pwsh
+        run: ./scripts/check-signing-mode.ps1 -Mode $env:SIGNING_MODE
 
       - name: Set up Node.js
         # actions/setup-node v4.4.0
@@ -162,24 +295,120 @@ jobs:
         working-directory: src-tauri
 
       - name: Import protected code-signing certificate
+        if: env.SIGNING_MODE == 'authenticode'
         shell: pwsh
-        run: ./scripts/prepare-windows-signing.ps1
+        run: ./scripts/prepare-windows-signing.ps1 -SigningMode $env:SIGNING_MODE -ExpectedThumbprint $env:WINDOWS_CODESIGN_EXPECTED_THUMBPRINT
         env:
           WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
           WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+          WINDOWS_CODESIGN_EXPECTED_THUMBPRINT: ${{ vars.WINDOWS_CODESIGN_EXPECTED_THUMBPRINT }}
 
       - name: Build signed per-machine NSIS bundle
+        if: env.SIGNING_MODE == 'authenticode'
         shell: pwsh
         run: pnpm tauri build --ci --target x86_64-pc-windows-msvc --bundles nsis --config $env:TAURI_RELEASE_CONFIG
 
-      - name: Verify signed installed release
+      - name: Build unsigned per-machine NSIS bundle
+        if: env.SIGNING_MODE == 'unsigned'
         shell: pwsh
-        run: ./scripts/verify-windows-release.ps1
+        run: pnpm tauri build --ci --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Verify installed release in the declared signing mode
+        shell: pwsh
+        run: |
+          if ($env:SIGNING_MODE -eq 'authenticode') {
+            ./scripts/verify-windows-release.ps1 -SigningMode authenticode -ExpectedThumbprint $env:WINDOWS_CODESIGN_EXPECTED_THUMBPRINT -ExpectedSubject $env:WINDOWS_CODESIGN_EXPECTED_SUBJECT
+          } else {
+            ./scripts/verify-windows-release.ps1 -SigningMode unsigned
+          }
+        env:
+          WINDOWS_CODESIGN_EXPECTED_THUMBPRINT: ${{ vars.WINDOWS_CODESIGN_EXPECTED_THUMBPRINT }}
+          WINDOWS_CODESIGN_EXPECTED_SUBJECT: ${{ vars.WINDOWS_CODESIGN_EXPECTED_SUBJECT }}
+
+      # Installer (renamed to the fixed asset name the updater expects), checksums,
+      # dependency inventory and the Ed25519-signed update manifest.
+      - name: Stage release assets
+        shell: pwsh
+        run: ./scripts/stage-release-assets.ps1 -SigningMode $env:SIGNING_MODE -ExpectedThumbprint $env:WINDOWS_CODESIGN_EXPECTED_THUMBPRINT -OutDir release-assets
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          WINDOWS_CODESIGN_EXPECTED_THUMBPRINT: ${{ vars.WINDOWS_CODESIGN_EXPECTED_THUMBPRINT }}
+
+      - name: Attest build provenance
+        # actions/attest-build-provenance v4.2.2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: |
+            release-assets/*.exe
+            release-assets/update.json
+            release-assets/SHA256SUMS
+            release-assets/dependency-inventory.json
+
+      - name: Upload verified release assets
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windows-release-assets
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Remove imported signing certificate
-        if: always()
+        if: always() && env.SIGNING_MODE == 'authenticode'
         shell: pwsh
         run: |
           if ($env:TAURI_WINDOWS_CERTIFICATE_THUMBPRINT) {
             Remove-Item "Cert:\CurrentUser\My\$env:TAURI_WINDOWS_CERTIFICATE_THUMBPRINT" -Force -ErrorAction SilentlyContinue
           }
+
+  # Release, stage 2: re-verify the exact artifacts, then publish. Tags only.
+  windows-release-publish:
+    name: Publish Windows release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows-release-build]
+    environment: windows-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      SIGNING_MODE: ${{ vars.WINDOWS_SIGNING_MODE }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out repository
+        # actions/checkout v4.2.2
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        # actions/setup-node v4.4.0
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Download verified release assets
+        # actions/download-artifact v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: windows-release-assets
+          path: release-assets
+
+      # Independent re-check of what stage 1 produced: signing mode, tag/version,
+      # checksums, manifest signature against the embedded key, and provenance.
+      - name: Re-verify release assets
+        run: node scripts/verify-release-assets.mjs --dir release-assets --tag "$GITHUB_REF_NAME" --signing-mode "$SIGNING_MODE"
+
+      - name: Verify build provenance attestations
+        run: |
+          for file in release-assets/*.exe release-assets/update.json release-assets/SHA256SUMS release-assets/dependency-inventory.json; do
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml"
+          done
+
+      - name: Create GitHub release
+        run: node scripts/publish-release.mjs --dir release-assets --tag "$GITHUB_REF_NAME" --signing-mode "$SIGNING_MODE"
+
+      # Last: clients only ever see a manifest whose installer is already published.
+      - name: Publish update manifest
+        run: node scripts/publish-update-manifest.mjs --dir release-assets --tag "$GITHUB_REF_NAME"

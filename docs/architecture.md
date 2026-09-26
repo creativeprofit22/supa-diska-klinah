@@ -19,8 +19,9 @@ The command layer delegates immediately. It does not contain platform operations
 ```text
 supa-diska-klinah (thin Tauri app) -> windows-platform
 privileged-helper (one-shot elevated binary) -> windows-platform
-windows-platform (Windows adapter and security policy) -> cleanup-core
+windows-platform (Windows adapter and security policy) -> cleanup-core, protection-core
 cleanup-core (portable contracts)
+protection-core (portable rule packs, matching, heuristics, evidence)
 ```
 
 `cleanup-core` contains serializable domain types, validated cleanup rules, scan policy, and platform-neutral filesystem traits. It cannot depend on Tauri, Windows bindings, registries, services, or processes. `windows-platform` implements no-follow metadata, canonical paths, Windows file identities, and rejection of every reparse-point attribute. It also owns Windows path policy, protocol validation, broker behavior, and helper dispatch. The application owns only Tauri registration and typed command input. The helper owns only process entry and fixed exit codes. Neither helper nor domain crate depends on Tauri.
@@ -31,7 +32,9 @@ Project artifact discovery is a deliberately separate read-only projection. `win
 
 The opt-in build artifact coordinator is a separate trust grant layered on saved root IDs. `cleanup-core` owns exact-path snapshots, protection reasons, deterministic age and size selection, and protected-byte floors. `windows-platform` owns native approval, executable identity, immutable argv launch, in-memory runs, atomic success ledgers, conservative external observations, and artifact-plan reconstruction. Artifact plans reuse the same final revalidator, serialized writer, pre-mutation journal, quarantine, undo, and purge path. The privileged helper has no build or artifact operation. See [build artifact budgets](build-artifact-budgets.md).
 
-`scripts/check-architecture.mjs` reads locked Cargo metadata and rejects any other workspace edge. It allows runtime `std::process::Command` only in the build artifact coordinator and rejects Tauri dependencies outside the application.
+`protection-core` owns the signed rule-pack format, Ed25519 verification, the matching engine, the heuristic catalog, typed evidence and the network opt-in policy. It has no Windows, Tauri or network dependency. `windows-platform::protection` owns rule storage and recovery, offline Authenticode, the read-only process inventory, scanning, quarantine, AMSI, Defender history and the application's only network sink (`protection/net.rs`). See [protection](protection.md) and [ADR 0003](adr/0003-local-first-protection.md).
+
+`scripts/check-architecture.mjs` reads locked Cargo metadata and rejects any other workspace edge. It also rejects HTTP client crates, WinHTTP outside `protection/net.rs`, sockets outside the loopback helper transport, process-control APIs in the protection module, a non-IPC webview CSP, and certification wording in protection UI. It allows runtime `std::process::Command` only in the build artifact coordinator and rejects Tauri dependencies outside the application.
 
 ## Frontend ownership
 
@@ -43,9 +46,16 @@ app/router
 features/dashboard       -> its API adapter and status state
 features/cleanup         -> preview, plan, execution, undo, history, and artifact coordinator composition
 features/build-artifacts -> typed build APIs, polling state, and reusable budget surfaces
-features/settings        -> persisted cleanup and artifact-budget policy composition
+features/settings        -> persisted cleanup and artifact-budget policy, language and app-update composition
+features/protection      -> overview, scan, processes, quarantine, rules and password check pages
 shared                   -> no app or feature imports
+shared/i18n              -> locale resolution, I18nProvider, useStrings/useFormat
+shared/app-settings      -> app-wide settings (language, update opt-in) and the update API adapter
 ```
+
+Every feature and shared component reads its text from a typed `strings.ts` catalog (English plus Latin American Spanish). `pnpm check:i18n` rejects hard-coded UI text; see [localization](localization.md).
+
+On the Rust side, `windows-platform::app_settings` stores language and the update opt-in, `windows-platform::i18n` holds native dialog strings, and `windows-platform::self_update` runs the opt-in updater over the existing protection network sink. Its Tauri commands are `get_update_status`, `check_for_update`, `download_update`, `install_update`, `discard_update`, `acknowledge_update_recovery`, `get_app_settings` and `set_app_settings`. See [updates](updates.md).
 
 A feature normally imports only its own files and shared code. The explicit build-artifact bridge is limited to the Cleanup and Settings composition files plus existing project-root display adapters; the architecture check pins those exact imports. Shared code cannot import app or feature code.
 
@@ -53,9 +63,9 @@ The hash router keeps packaged navigation independent of an HTTP fallback. Route
 
 ## Tauri capability boundary
 
-The application exposes foundation and restore-point commands plus cleanup preview, project-root list/add/pause/remove/discovery, plan creation, safe execution, separate permanent execution, undo, history, automatic-policy commands, and build profile/run/artifact-budget commands. Build profile registration accepts typed data and invokes native confirmation. Later start, get, cancel, remove, and preview operations accept opaque IDs or bounded policy values; runtime launch commands accept no executable, argv, environment, working directory, artifact path, or deletion primitive. `build.rs`, `generate_handler!`, and `capabilities/main.json` contain the same command set for the local Windows `main` webview only.
+The application exposes foundation and restore-point commands plus cleanup preview, project-root list/add/pause/remove/discovery, plan creation, safe execution, separate permanent execution, undo, history, automatic-policy commands, and build profile/run/artifact-budget commands. Protection commands accept fixed enums, booleans and opaque 32-hex IDs only; scan folders and rule-pack folders come from native pickers, and quarantine, restore, delete and previous-pack restore require native confirmation. Build profile registration accepts typed data and invokes native confirmation. Later start, get, cancel, remove, and preview operations accept opaque IDs or bounded policy values; runtime launch commands accept no executable, argv, environment, working directory, artifact path, or deletion primitive. `build.rs`, `generate_handler!`, and `capabilities/main.json` contain the same command set for the local Windows `main` webview only.
 
-Production navigation allows only the packaged Tauri origin. Development additionally allows exactly `http://127.0.0.1:1420`. Content security policies are explicit, asset protocol is disabled, and no generic shell, filesystem, process, dialog, or updater plugin is granted. One reviewed standard-integrity coordinator launches only natively approved canonical `.exe` profiles through `Command::new(executable).args(argv)` with disconnected streams. The main window is created hidden and unfocused; startup policy shows and focuses it only for foreground launches. The main executable is `asInvoker` and rejects an elevated token before constructing Tauri. Only the separately packaged helper requests UAC.
+Production navigation allows only the packaged Tauri origin. Development additionally allows exactly `http://127.0.0.1:1520`. Browser-only previews use strict port 1521; the native navigation allowlist does not include that preview origin. Both project servers fail rather than taking another application's port. Content security policies are explicit, asset protocol is disabled, and no generic shell, filesystem, process, dialog, or updater plugin is granted. One reviewed standard-integrity coordinator launches only natively approved canonical `.exe` profiles through `Command::new(executable).args(argv)` with disconnected streams. The main window is created hidden and unfocused; startup policy shows and focuses it only for foreground launches. The main executable is `asInvoker` and rejects an elevated token before constructing Tauri. The main app never elevates itself. The separately packaged helper and explicitly native-confirmed vendor operations may request Windows elevation; no generic elevated command surface is exposed.
 
 Adding a command requires all of the following:
 

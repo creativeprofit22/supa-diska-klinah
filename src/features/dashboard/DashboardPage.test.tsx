@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DashboardPage } from "./DashboardPage";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 
 const invoke = vi.hoisted(() => vi.fn());
 
@@ -17,55 +19,32 @@ vi.mock("./model/useFoundationStatus", () => ({
   }),
 }));
 
-describe("Dashboard restore-point action", () => {
+describe("Dashboard restore-point panel", () => {
   afterEach(() => {
     cleanup();
     invoke.mockReset();
   });
 
-  it("requires explicit confirmation before requesting elevation", async () => {
-    invoke.mockResolvedValue({ sequenceNumber: 42 });
-    render(<DashboardPage />);
-
-    expect(invoke).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Create restore point" }));
-    expect(invoke).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Confirm and continue" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledOnce());
-    expect(invoke).toHaveBeenCalledWith("create_system_restore_point", {
-      input: { description: "Supa Diska Klinah safety restore point" },
-    });
-  });
-
-  it("renders the sequence number returned by Windows", async () => {
-    invoke.mockResolvedValue({ sequenceNumber: 73 });
-    render(<DashboardPage />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Create restore point" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm and continue" }));
-
-    expect((await screen.findByRole("status")).textContent).toContain(
-      "Restore point created. Sequence number: 73",
-    );
-  });
-
-  it("returns to a retryable state when elevation is denied", async () => {
-    invoke.mockRejectedValue({ code: "operationUnavailable" });
-    render(<DashboardPage />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Create restore point" }));
-    fireEvent.click(screen.getByRole("button", { name: "Confirm and continue" }));
-
-    const alert = await screen.findByRole("alert");
-    expect(screen.queryByText(/Restore point created/)).toBeNull();
-    expect(alert.textContent).toBe(
-      "Windows did not complete the restore point. This app is still open.",
+  it("links to the Restore points page instead of creating a restore point directly", () => {
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
     );
 
-    const retry = screen.getByRole("button", { name: "Create restore point" });
-    expect((retry as HTMLButtonElement).disabled).toBe(false);
-    fireEvent.click(retry);
-    expect(screen.getByRole("button", { name: "Confirm and continue" })).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Create or view restore points" });
+    expect(link.getAttribute("href")).toBe("/restore-points");
+    expect(screen.queryByRole("button", { name: "Create restore point" })).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe("Dashboard localization", () => {
+  afterEach(() => cleanup());
+  it("renders Spanish copy for es-MX", () => {
+    render(<I18nProvider languages={["es-MX"]}><MemoryRouter><DashboardPage /></MemoryRouter></I18nProvider>);
+    expect(screen.getByRole("heading", { name: "Preparación del sistema" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Crear o ver puntos de restauración" })).toBeTruthy();
+    expect(screen.getByText("Conectado")).toBeTruthy();
   });
 });

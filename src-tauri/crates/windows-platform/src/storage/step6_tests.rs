@@ -112,6 +112,54 @@ fn filter() -> cleanup_core::storage::large_files::FileFilter {
         ..Default::default()
     }
 }
+// Kudu db09e051d0615121e659db187e3799438acbc9e6:
+// large-file-finder.ipc.ts walkDirectory includes files at maxDepth,
+// excludes deeper directories, accepts size == minFileSize and sorts descending.
+#[test]
+fn step6_pinned_large_file_inclusive_depth_size_and_order() {
+    let f = Fixture::new();
+    f.file("below.bin", 9, 100);
+    f.file("root.bin", 10, 100);
+    f.file("one/first.bin", 30, 100);
+    f.file("one/two/boundary.bin", 20, 100);
+    f.file("one/two/three/too-deep.bin", 40, 100);
+    let (service, id) = f.scan(
+        StorageModule::LargeFiles,
+        StorageLimits {
+            depth: 2,
+            ..StorageLimits::default()
+        },
+        cleanup_core::storage::large_files::FileFilter {
+            minimum_bytes: 10,
+            ..Default::default()
+        },
+    );
+    let result = page(
+        &service,
+        &id,
+        StorageModule::LargeFiles,
+        PageCollection::Files,
+        None,
+    );
+    let sizes: Vec<_> = result
+        .records
+        .iter()
+        .map(|record| {
+            let StorageRecord::File(file) = record else {
+                panic!("file record required")
+            };
+            file.logical_bytes
+        })
+        .collect();
+    assert_eq!(sizes, vec![30, 20, 10]);
+    assert!(
+        result
+            .completeness
+            .reasons
+            .contains(&PartialReason::DepthLimit)
+    );
+    service.release(&id).unwrap();
+}
 #[test]
 fn step6_native_deep_totals_hardlinks_extensions_and_parent_paging() {
     let f = Fixture::new();
@@ -159,7 +207,13 @@ fn step6_native_deep_totals_hardlinks_extensions_and_parent_paging() {
         Some(root.node_id.clone()),
     );
     assert_eq!(children.records.len(), 2);
-    let StorageRecord::Directory(a) = &children.records[0] else {
+    // Pinned upstream order is largest first; preserve every accounting check
+    // for the smaller hard-linked subtree rather than assuming path order.
+    let StorageRecord::Directory(largest) = &children.records[0] else {
+        panic!()
+    };
+    assert_eq!(largest.logical_bytes, 40);
+    let StorageRecord::Directory(a) = &children.records[1] else {
         panic!()
     };
     assert_eq!(

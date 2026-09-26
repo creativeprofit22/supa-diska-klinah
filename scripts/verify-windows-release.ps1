@@ -1,10 +1,33 @@
+# Installs, inspects, smoke-tests and uninstalls a release candidate.
+#
+# -SigningMode is mandatory and must match the repository's declared mode:
+#   unsigned      the installer, app and helper must be plainly unsigned
+#                 (NotSigned). A partial or corrupted signature fails.
+#   authenticode  every file must be validly signed by the expected product
+#                 certificate (thumbprint and subject) with a timestamp.
 param(
   [ValidateSet("x86_64-pc-windows-msvc")]
   [string]$Target = "x86_64-pc-windows-msvc",
-  [string]$InstallerPath
+  [string]$InstallerPath,
+  [Parameter(Mandatory = $true)]
+  [ValidateSet("unsigned", "authenticode")]
+  [string]$SigningMode,
+  [string]$ExpectedThumbprint,
+  [string]$ExpectedSubject
 )
 
 $ErrorActionPreference = "Stop"
+if ($SigningMode -eq "authenticode") {
+  if ($ExpectedThumbprint -notmatch '^[0-9A-F]{40}$') {
+    throw "Authenticode mode needs -ExpectedThumbprint (40 uppercase hex characters)."
+  }
+  if ([string]::IsNullOrWhiteSpace($ExpectedSubject)) {
+    throw "Authenticode mode needs -ExpectedSubject."
+  }
+}
+elseif ($ExpectedThumbprint -or $ExpectedSubject) {
+  throw "Unsigned mode must not be given an expected signer."
+}
 if (-not $InstallerPath) {
   $installer = Get-ChildItem "src-tauri/target/$Target/release/bundle/nsis/*.exe" |
     Sort-Object LastWriteTime -Descending |
@@ -16,17 +39,31 @@ if (-not $InstallerPath) {
 }
 $InstallerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
 
-function Assert-ValidSignature {
+function Assert-ReleaseSignature {
   param([string]$Path)
 
   $signature = Get-AuthenticodeSignature -LiteralPath $Path
+  if ($SigningMode -eq "unsigned") {
+    if ($signature.Status -ne [Management.Automation.SignatureStatus]::NotSigned -or $signature.SignerCertificate) {
+      throw "Unsigned mode requires $Path to be plainly unsigned, but its signature status is $($signature.Status): $($signature.StatusMessage)"
+    }
+    return
+  }
   if ($signature.Status -ne [Management.Automation.SignatureStatus]::Valid -or -not $signature.SignerCertificate) {
     throw "Authenticode validation failed for $Path`: $($signature.StatusMessage)"
   }
-  return $signature.SignerCertificate.Thumbprint
+  if ($signature.SignerCertificate.Thumbprint -ne $ExpectedThumbprint) {
+    throw "$Path is signed by $($signature.SignerCertificate.Thumbprint), not the product certificate $ExpectedThumbprint."
+  }
+  if ($signature.SignerCertificate.Subject -notlike "*CN=$ExpectedSubject*") {
+    throw "$Path is signed by '$($signature.SignerCertificate.Subject)', not '$ExpectedSubject'."
+  }
+  if (-not $signature.TimeStamperCertificate) {
+    throw "$Path has no timestamp countersignature."
+  }
 }
 
-$installerThumbprint = Assert-ValidSignature $InstallerPath
+Assert-ReleaseSignature $InstallerPath
 $programFiles = if ($env:ProgramW6432) { $env:ProgramW6432 } else { $env:ProgramFiles }
 $installDirectory = Join-Path $programFiles "Supa Diska Klinah"
 $appPath = Join-Path $installDirectory "supa-diska-klinah.exe"
@@ -55,11 +92,10 @@ try {
     throw "The privileged helper is not adjacent to the application executable."
   }
 
-  $appThumbprint = Assert-ValidSignature $appPath
-  $helperThumbprint = Assert-ValidSignature $helperPath
-  if ($installerThumbprint -ne $appThumbprint -or $appThumbprint -ne $helperThumbprint) {
-    throw "The installer, application, and privileged helper were not signed by one certificate."
-  }
+  # Every file is checked against the declared mode (and, when signed, the
+  # one expected product certificate), not just against each other.
+  Assert-ReleaseSignature $appPath
+  Assert-ReleaseSignature $helperPath
 
   $acl = Get-Acl -LiteralPath $resolvedInstallDirectory
   $broadPrincipals = @("S-1-1-0", "S-1-5-11", "S-1-5-32-545")
@@ -83,7 +119,7 @@ try {
   }
 
   & "$PSScriptRoot/smoke-native-ci.ps1" -Target $Target -Directory $resolvedInstallDirectory
-  Write-Output "Signed release signatures, adjacency, Program Files ACLs, and standard integrity verified."
+  Write-Output "Release ($SigningMode) signatures, adjacency, Program Files ACLs, and standard integrity verified."
 }
 finally {
   if ($installed) {

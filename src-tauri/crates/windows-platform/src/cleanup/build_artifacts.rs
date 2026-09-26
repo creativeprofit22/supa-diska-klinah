@@ -149,28 +149,26 @@ pub struct NativeProfileApprover;
 
 impl ProfileApprover for NativeProfileApprover {
     fn approve(&self, profile: &BuildProfile) -> Result<bool, BuildArtifactError> {
-        let mut message = format!(
-            "Allow this repeatable build profile?\n\nExecutable:\n{}\n\nArguments:",
-            profile.executable
-        );
+        let strings = crate::i18n::native();
+        let mut message = (strings.build_profile_intro)(&profile.executable);
         if profile.argv.is_empty() {
-            message.push_str("\n(none)");
+            message.push_str(strings.build_profile_no_arguments);
         } else {
             for argument in &profile.argv {
                 message.push_str("\n• ");
                 message.push_str(argument);
             }
         }
-        message.push_str("\n\nWorking directory:\n");
+        message.push_str(strings.build_profile_working_directory);
         message.push_str(&profile.working_directory);
-        message.push_str("\n\nArtifact paths:");
+        message.push_str(strings.build_profile_artifact_paths);
         for artifact in &profile.artifact_paths {
             message.push_str("\n• ");
             message.push_str(&artifact.relative_path);
         }
         let message =
             wide(OsStr::new(&message)).map_err(|_| BuildArtifactError::OperationFailed)?;
-        let title = wide(OsStr::new("Approve build profile"))
+        let title = wide(OsStr::new(strings.approve_build_profile_title))
             .map_err(|_| BuildArtifactError::OperationFailed)?;
         // SAFETY: both strings are valid, NUL-terminated UTF-16 and no owner handle is required.
         let result = unsafe {
@@ -1860,15 +1858,35 @@ mod tests {
         (root, manager, approver, runner, input)
     }
 
+    /// Wall-clock bound for runs driven by the in-process `TestRunner`.
+    const MOCK_RUN_DEADLINE: Duration = Duration::from_secs(30);
+    /// Wall-clock bound for runs that spawn a real `cargo build`; generous so a
+    /// loaded CI host (parallel tests, antivirus, slow disk) does not flake.
+    const REAL_CARGO_RUN_DEADLINE: Duration = Duration::from_secs(300);
+
     fn wait_for_terminal(manager: &BuildArtifactManager, run_id: &str) -> BuildRun {
-        for _ in 0..2_000 {
+        wait_for_terminal_within(manager, run_id, MOCK_RUN_DEADLINE)
+    }
+
+    fn wait_for_terminal_within(
+        manager: &BuildArtifactManager,
+        run_id: &str,
+        budget: Duration,
+    ) -> BuildRun {
+        let started = Instant::now();
+        loop {
             let run = manager.run(run_id).unwrap();
             if run.state.terminal() {
                 return run;
             }
-            thread::sleep(Duration::from_millis(1));
+            if started.elapsed() >= budget {
+                panic!(
+                    "build run {run_id} did not finish within {budget:?}; last state {:?}",
+                    run.state
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
         }
-        panic!("build run did not finish")
     }
 
     #[test]
@@ -2228,7 +2246,13 @@ mod tests {
         assert!(root.join("target/release/output.bin").exists());
 
         let service = super::super::execution::CleanupService::new(root.join("app-data")).unwrap();
-        assert!(service.history().unwrap().is_empty());
+        assert!(
+            service
+                .history_page(crate::history::HistoryRequest::default())
+                .unwrap()
+                .records
+                .is_empty()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2265,8 +2289,9 @@ mod tests {
 
         let service = super::super::execution::CleanupService::new(root.join("app-data")).unwrap();
         let execution = service
-            .history()
+            .history_page(crate::history::HistoryRequest::default())
             .unwrap()
+            .records
             .into_iter()
             .find(|entry| {
                 entry.disposition == super::super::storage::CleanupDisposition::Quarantine
@@ -2363,8 +2388,9 @@ mod tests {
 
         let service = super::super::execution::CleanupService::new(root.join("app-data")).unwrap();
         let execution = service
-            .history()
+            .history_page(crate::history::HistoryRequest::default())
             .unwrap()
+            .records
             .into_iter()
             .find(|entry| {
                 entry
@@ -2610,7 +2636,10 @@ mod tests {
         let protected = fixture.root.join("target/debug");
         let quarantine = fixture.journal.items[0].quarantine_path.as_ref().unwrap();
         let service = super::super::execution::CleanupService::new(app_data.clone()).unwrap();
-        let history = service.history().unwrap();
+        let history = service
+            .history_page(crate::history::HistoryRequest::default())
+            .unwrap()
+            .records;
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].execution_id, fixture.journal.execution_id);
         assert_eq!(history[0].items[0].state, ItemState::Quarantined);
@@ -2709,7 +2738,7 @@ mod tests {
             .unwrap();
         let run = manager.start_run(&release.profile_id).unwrap();
         assert_eq!(
-            wait_for_terminal(&manager, &run.run_id).state,
+            wait_for_terminal_within(&manager, &run.run_id, REAL_CARGO_RUN_DEADLINE).state,
             BuildRunState::Succeeded
         );
         let debug = manager
@@ -2735,7 +2764,7 @@ mod tests {
             .unwrap();
         let run = manager.start_run(&debug.profile_id).unwrap();
         assert_eq!(
-            wait_for_terminal(&manager, &run.run_id).state,
+            wait_for_terminal_within(&manager, &run.run_id, REAL_CARGO_RUN_DEADLINE).state,
             BuildRunState::Succeeded
         );
         let executable = root.join("target/debug/artifact-budget-fixture.exe");
@@ -2761,7 +2790,7 @@ mod tests {
 
         let run = manager.start_run(&debug.profile_id).unwrap();
         assert_eq!(
-            wait_for_terminal(&manager, &run.run_id).state,
+            wait_for_terminal_within(&manager, &run.run_id, REAL_CARGO_RUN_DEADLINE).state,
             BuildRunState::Succeeded
         );
         assert_eq!(

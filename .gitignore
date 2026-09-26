@@ -11,6 +11,8 @@ artifacts/native-smoke/
 .env
 .env.*
 !.env.example
+*.pem
+!src-tauri/crates/windows-platform/src/protection/fixtures/test-rule-pack.pem
 
 # Tooling and system files
 .gg/

@@ -12,6 +12,8 @@ import {
   undoCleanup,
 } from "../api/previewCleanup";
 
+import { useCleanupHistory } from "../../../shared/cleanup/useCleanupHistory";
+
 interface CleanupPreviewState {
   result: CleanupPreview | null;
   error: boolean;
@@ -21,7 +23,7 @@ interface CleanupPreviewState {
   selectedBytes: number;
   plan: CleanupPlanSummary | null;
   execution: CleanupExecutionSummary | null;
-  history: CleanupExecutionSummary[];
+  history: ReturnType<typeof useCleanupHistory>;
   retry: () => void;
   toggle: (id: string) => void;
   selectAll: () => void;
@@ -40,7 +42,9 @@ export function useCleanupPreview(): CleanupPreviewState {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [plan, setPlan] = useState<CleanupPlanSummary | null>(null);
   const [execution, setExecution] = useState<CleanupExecutionSummary | null>(null);
-  const [history, setHistory] = useState<CleanupExecutionSummary[]>([]);
+  const history = useCleanupHistory(cleanupHistory);
+  const { refresh: refreshHistory, updateVisible } = history;
+  useEffect(() => { void refreshHistory(); }, [refreshHistory]);
   const retry = useCallback(() => setRequest((value) => value + 1), []);
 
   useEffect(() => {
@@ -49,11 +53,10 @@ export function useCleanupPreview(): CleanupPreviewState {
     setSelectedIds(new Set());
     setError(false);
     setLoading(true);
-    Promise.all([previewCleanup(), cleanupHistory()]).then(
-      ([preview, executions]) => {
+    previewCleanup().then(
+      (preview) => {
         if (active) {
           setResult(preview);
-          setHistory(executions);
           setLoading(false);
         }
       },
@@ -119,7 +122,7 @@ export function useCleanupPreview(): CleanupPreviewState {
           ? await executePermanentCleanupPlan(plan.planId)
           : await executeCleanupPlan(plan.planId);
       setExecution(completed);
-      setHistory((current) => [completed, ...current.filter((item) => item.executionId !== completed.executionId)]);
+      void refreshHistory();
       setPlan(null);
       setSelectedIds(new Set());
     } catch {
@@ -127,7 +130,7 @@ export function useCleanupPreview(): CleanupPreviewState {
     } finally {
       setBusy(false);
     }
-  }, [plan]);
+  }, [plan, refreshHistory]);
 
   const undo = useCallback(async (executionId: string) => {
     setBusy(true);
@@ -135,13 +138,13 @@ export function useCleanupPreview(): CleanupPreviewState {
     try {
       const updated = await undoCleanup(executionId);
       setExecution(updated);
-      setHistory((current) => current.map((item) => (item.executionId === executionId ? updated : item)));
+      updateVisible(updated);
     } catch {
       setError(true);
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [updateVisible]);
 
   return {
     result,

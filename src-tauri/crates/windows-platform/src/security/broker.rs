@@ -15,6 +15,7 @@ use super::{
         ResponseEnvelope, SecretToken, TOKEN_BYTES, generate_request_id, read_json_frame,
         tokens_match, write_json_frame,
     },
+    system_changes::{HelperChangeItem, HelperChangeResult, batch_fits_frame, validate_batch},
 };
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE},
@@ -37,6 +38,9 @@ pub enum BrokerError {
     InvalidRequest,
     PrivilegeFailure,
     SystemRestoreFailure,
+    /// The request was sent but no valid response arrived; the helper may
+    /// have changed the system.
+    ResponseLost,
 }
 
 impl fmt::Display for BrokerError {
@@ -48,6 +52,9 @@ impl fmt::Display for BrokerError {
             Self::InvalidRequest => "privileged request was invalid or stale",
             Self::PrivilegeFailure => "privileged helper was not elevated",
             Self::SystemRestoreFailure => "Windows System Restore failed",
+            Self::ResponseLost => {
+                "privileged helper stopped responding after receiving the request"
+            }
         })
     }
 }
@@ -97,12 +104,55 @@ pub fn create_system_restore_point(
     )?;
     let helper = helper_path()?;
     let _process = launch_elevated(&helper, port, &token)?;
-    exchange_once(
+    match exchange_once(
         listener,
         token.expose(),
         &request,
         Instant::now() + HANDSHAKE_DEADLINE,
-    )
+    )? {
+        PrivilegedResponse::Success { result } => Ok(result),
+        _ => Err(BrokerError::ResponseLost),
+    }
+}
+
+/// Send one confirmed plan's helper-privileged changes under a single UAC
+/// prompt. Returns exactly one result per item, in order.
+pub fn apply_system_changes(
+    items: Vec<HelperChangeItem>,
+) -> Result<Vec<HelperChangeResult>, BrokerError> {
+    if !validate_batch(&items) || !batch_fits_frame(&items) {
+        return Err(BrokerError::InvalidRequest);
+    }
+    let count = items.len();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let port = listener.local_addr()?.port();
+    let token = SecretToken::generate()?;
+    let request = RequestEnvelope::new(
+        generate_request_id()?,
+        PrivilegedOperation::ApplySystemChanges { changes: items },
+    )?;
+    let helper = helper_path()?;
+    let _process = launch_elevated(&helper, port, &token)?;
+    let response = exchange_once(
+        listener,
+        token.expose(),
+        &request,
+        Instant::now() + HANDSHAKE_DEADLINE,
+    )?;
+    batch_results(response, count)
+}
+
+fn batch_results(
+    response: PrivilegedResponse,
+    count: usize,
+) -> Result<Vec<HelperChangeResult>, BrokerError> {
+    match response {
+        PrivilegedResponse::SystemChangesApplied { results } if results.len() == count => {
+            Ok(results)
+        }
+        PrivilegedResponse::Error { code } => Err(code.into()),
+        _ => Err(BrokerError::ResponseLost),
+    }
 }
 
 fn helper_path() -> Result<ValidatedExecutable, BrokerError> {
@@ -160,7 +210,7 @@ fn exchange_once(
     expected_token: &[u8; TOKEN_BYTES],
     request: &RequestEnvelope,
     deadline: Instant,
-) -> Result<CreateSystemRestorePointResult, BrokerError> {
+) -> Result<PrivilegedResponse, BrokerError> {
     listener.set_nonblocking(true)?;
     let (mut stream, peer) = loop {
         match listener.accept() {
@@ -189,13 +239,15 @@ fn exchange_once(
     }
 
     write_json_frame(&mut stream, request)?;
-    let response: ResponseEnvelope = read_json_frame(&mut stream)?;
+    // From here on the helper may have acted: every failure is ResponseLost.
+    let response: ResponseEnvelope =
+        read_json_frame(&mut stream).map_err(|_| BrokerError::ResponseLost)?;
     response
         .validate_for(&request.request_id)
-        .map_err(|_| BrokerError::HelperUnavailable)?;
+        .map_err(|_| BrokerError::ResponseLost)?;
     match response.response {
-        PrivilegedResponse::Success { result } => Ok(result),
         PrivilegedResponse::Error { code } => Err(code.into()),
+        other => Ok(other),
     }
 }
 
@@ -271,7 +323,58 @@ mod tests {
             Instant::now() + SOCKET_TIMEOUT,
         );
         client.join().unwrap();
-        result
+        match result? {
+            PrivilegedResponse::Success { result } => Ok(result),
+            _ => Err(BrokerError::ResponseLost),
+        }
+    }
+
+    #[test]
+    fn batch_results_must_match_the_request_length() {
+        use cleanup_core::system_change::{ChangeOutcome, PriorState};
+        let result = HelperChangeResult {
+            prior: PriorState::Enabled { enabled: true },
+            outcome: ChangeOutcome::Applied,
+        };
+        let response = |results| PrivilegedResponse::SystemChangesApplied { results };
+        assert_eq!(
+            batch_results(response(vec![result.clone()]), 1)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            batch_results(response(vec![result]), 2).unwrap_err(),
+            BrokerError::ResponseLost
+        );
+        assert_eq!(
+            batch_results(
+                PrivilegedResponse::Error {
+                    code: HelperErrorCode::PrivilegeFailure
+                },
+                1
+            )
+            .unwrap_err(),
+            BrokerError::PrivilegeFailure
+        );
+        assert_eq!(
+            batch_results(
+                PrivilegedResponse::Success {
+                    result: CreateSystemRestorePointResult { sequence_number: 1 }
+                },
+                1
+            )
+            .unwrap_err(),
+            BrokerError::ResponseLost
+        );
+    }
+
+    #[test]
+    fn invalid_batches_are_rejected_before_uac() {
+        assert_eq!(
+            apply_system_changes(vec![]).unwrap_err(),
+            BrokerError::InvalidRequest
+        );
     }
 
     #[test]

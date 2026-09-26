@@ -1,40 +1,41 @@
 import { useEffect } from "react";
-import { formatBytes } from "../cleanup/format";
+import { useFormat, useStrings } from "../../shared/i18n/I18nProvider";
+import { driveInventoryError } from "./api";
+import { drivesStrings } from "./strings";
 import { useDriveInventory } from "./useDriveInventory";
 
 export function DriveInventoryPage() {
+  const t = useStrings(drivesStrings);
+  const fmt = useFormat();
   const { state, refresh } = useDriveInventory();
   const loading = state.kind === "loading";
-  useEffect(() => { document.title = "Drives | Supa Diska Klinah"; }, []);
+  useEffect(() => { document.title = t.documentTitle; }, [t]);
 
   return (
     <section className="drive-inventory" aria-labelledby="drives-heading">
       <header className="page-header cleanup-page-header">
         <div>
-          <p className="kicker">Read-only inventory</p>
-          <h1 id="drives-heading">Fixed drives</h1>
-          <p>Review local drive capacity. No files are scanned, changed, or removed.</p>
+          <p className="kicker">{t.kicker}</p>
+          <h1 id="drives-heading">{t.heading}</h1>
+          <p>{t.intro}</p>
         </div>
         <button type="button" disabled={loading} onClick={refresh}>
-          {state.kind === "error" ? "Try again" : "Refresh drives"}
+          {state.kind === "error" ? t.tryAgain : t.refresh}
         </button>
       </header>
 
-      <p className="cleanup-diagnostics">
-        Capacity is reported by Windows for your account, including any quota limits.
-        Removable, network, and optical drives are not included.
-      </p>
+      <p className="cleanup-diagnostics">{t.diagnostics}</p>
       <div role="status" className="status-message" aria-atomic="true">
-        {loading && "Reading fixed drives from Windows…"}
+        {loading && t.reading}
         {state.kind === "ready" && (state.inventory.partial
-          ? `Incomplete inventory: ${state.inventory.drives.length} fixed drives available.`
-          : `${state.inventory.drives.length} fixed ${state.inventory.drives.length === 1 ? "drive" : "drives"} found.`)}
+          ? t.incomplete(state.inventory.drives.length, fmt.number(state.inventory.drives.length))
+          : t.found(state.inventory.drives.length, fmt.number(state.inventory.drives.length)))}
       </div>
 
       {state.kind === "error" && (
         <div className="cleanup-state-panel error-state" role="alert">
-          <h2>Could not read drive information</h2>
-          <p>{state.message}</p>
+          <h2>{t.readError}</h2>
+          <p>{driveInventoryError(state.reason, t.errors)}</p>
         </div>
       )}
 
@@ -42,15 +43,15 @@ export function DriveInventoryPage() {
         <>
           {state.inventory.partial && (
             <div className="cleanup-state-panel error-state">
-              <h2>Some drive information is unavailable</h2>
-              <p>Missing information is not zero capacity. Refresh to try again.</p>
+              <h2>{t.partialHeading}</h2>
+              <p>{t.partialBody}</p>
               {state.inventory.warnings.length > 0 && (
                 <ul>
                   {state.inventory.warnings.map((warning, index) => (
                     <li key={index}>
                       {warning.code === "drive_unavailable"
-                        ? `${warning.drive ?? "A fixed drive"}: Windows could not read this drive.`
-                        : "Windows returned only part of the drive inventory."}
+                        ? t.driveUnavailable(warning.drive)
+                        : t.inventoryPartial}
                     </li>
                   ))}
                 </ul>
@@ -59,24 +60,24 @@ export function DriveInventoryPage() {
           )}
           {state.inventory.drives.length === 0 && !state.inventory.partial && (
             <div className="cleanup-state-panel">
-              <h2>No fixed drives found</h2>
-              <p>Windows reported no eligible local fixed drives. Refresh to check again.</p>
+              <h2>{t.emptyHeading}</h2>
+              <p>{t.emptyBody}</p>
             </div>
           )}
           {state.inventory.drives.length > 0 && (
-            <ul className="drive-list" aria-label="Fixed drives">
-              {state.inventory.drives.map((drive, index) => (
+            <ul className="drive-list" aria-label={t.listLabel}>
+              {state.inventory.drives.map((drive) => (
                 <li className="status-panel" key={drive.driveId}>
                   <div className="readiness-heading">
-                    <h2>{drive.label.trim() || `Unlabelled drive ${index + 1}`}</h2>
-                    {drive.system === true && <strong>System drive</strong>}
-                    {drive.system === null && <span>System classification unavailable</span>}
+                    <h2>{drive.label.trim() || t.unlabelled} ({drive.displayMount})</h2>
+                    {drive.system === true && <strong>{t.systemDrive}</strong>}
+                    {drive.system === null && <span>{t.systemUnknown}</span>}
                   </div>
                   <dl className="status-list">
-                    <div><dt>File system</dt><dd>{drive.filesystem || "Not reported"}</dd></div>
-                    <div><dt>Total capacity</dt><dd>{formatBytes(drive.totalBytes)}</dd></div>
-                    <div><dt>Used space</dt><dd>{formatBytes(drive.usedBytes)}</dd></div>
-                    <div><dt>Available space</dt><dd>{formatBytes(drive.freeBytes)}</dd></div>
+                    <div><dt>{t.fileSystem}</dt><dd>{drive.filesystem || t.notReported}</dd></div>
+                    <div><dt>{t.totalCapacity}</dt><dd>{fmt.bytes(drive.totalBytes)}</dd></div>
+                    <div><dt>{t.usedSpace}</dt><dd>{fmt.bytes(drive.usedBytes)}</dd></div>
+                    <div><dt>{t.availableSpace}</dt><dd>{fmt.bytes(drive.freeBytes)}</dd></div>
                   </dl>
                 </li>
               ))}

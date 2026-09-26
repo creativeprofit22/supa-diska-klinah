@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CleanupPreviewPage } from "./CleanupPreviewPage";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 
 vi.mock("../build-artifacts/BuildArtifactCoordinator", () => ({
   BuildArtifactCoordinator: () => <div>Build artifact budgets</div>,
@@ -98,7 +99,7 @@ function mockBackend(
     if (command === "discover_project_artifacts") {
       return discovery instanceof Error ? Promise.reject(discovery) : Promise.resolve(discovery);
     }
-    if (command === "cleanup_history") return Promise.resolve([]);
+    if (command === "cleanup_history") return Promise.resolve({ records: [], nextCursor: null });
     if (command === "create_cleanup_plan") return Promise.resolve({
       planId: "c".repeat(32),
       disposition: "recycleBin",
@@ -131,7 +132,7 @@ describe("CleanupPreviewPage", () => {
     let addCount = 0;
     invoke.mockImplementation((command: string) => {
       if (command === "preview_cleanup") return Promise.resolve({ ...preview, records: [] });
-      if (command === "cleanup_history") return Promise.resolve([]);
+      if (command === "cleanup_history") return Promise.resolve({ records: [], nextCursor: null });
       if (command === "list_project_roots") return Promise.resolve([]);
       if (command === "add_project_root") {
         addCount += 1;
@@ -168,7 +169,7 @@ describe("CleanupPreviewPage", () => {
     let roots = [projectRoot];
     invoke.mockImplementation((command: string, input?: Record<string, unknown>) => {
       if (command === "preview_cleanup") return Promise.resolve({ ...preview, records: [] });
-      if (command === "cleanup_history") return Promise.resolve([]);
+      if (command === "cleanup_history") return Promise.resolve({ records: [], nextCursor: null });
       if (command === "list_project_roots") return Promise.resolve(roots);
       if (command === "set_project_root_paused") {
         roots = [{ ...projectRoot, paused: Boolean(input?.paused) }];
@@ -222,7 +223,7 @@ describe("CleanupPreviewPage", () => {
       if (command === "list_project_roots") return Promise.resolve([projectRoot]);
       if (command === "discover_project_artifacts") return pending;
       if (command === "remove_project_root") return Promise.resolve([]);
-      return Promise.resolve(command === "cleanup_history" ? [] : { ...preview, records: [] });
+      return Promise.resolve(command === "cleanup_history" ? { records: [], nextCursor: null } : { ...preview, records: [] });
     });
     function Harness() {
       const state = useProjectArtifactDiscovery();
@@ -285,7 +286,7 @@ describe("CleanupPreviewPage", () => {
     render(<CleanupPreviewPage />);
     expect(await screen.findByRole("heading", { name: "Nothing found" })).toBeTruthy();
     expect(invoke).toHaveBeenCalledWith("preview_cleanup");
-    expect(invoke).toHaveBeenCalledWith("cleanup_history");
+    expect(invoke).toHaveBeenCalledWith("cleanup_history", new TextEncoder().encode(JSON.stringify({ cursor: null, limit: 20 })));
   });
 
   it("scans again on retry without changing command inputs", async () => {
@@ -367,7 +368,7 @@ describe("CleanupPreviewPage", () => {
     mockBackend();
     invoke.mockImplementation((command: string) => {
       if (command === "preview_cleanup") return Promise.resolve(preview);
-      if (command === "cleanup_history") return Promise.resolve([]);
+      if (command === "cleanup_history") return Promise.resolve({ records: [], nextCursor: null });
       if (command === "create_cleanup_plan") return Promise.resolve({ planId: "c".repeat(32), disposition: "permanent", selectedCount: 1, selectedBytes: 1024 });
       if (command === "execute_permanent_cleanup_plan") return Promise.resolve(execution("permanent"));
       return Promise.reject(new Error("normal execution must not run"));
@@ -382,14 +383,61 @@ describe("CleanupPreviewPage", () => {
     expect(invoke.mock.calls.some(([command]) => command === "execute_cleanup_plan")).toBe(false);
   });
 
+  it("browses older history and Undoes only its immutable execution ID without rescanning", async () => {
+    const cursor = JSON.stringify({version:1,kind:"cleanup",timestamp:1,id:"a".repeat(32)});
+    const old = {...execution("recycleBin"),executionId:"e".repeat(32)};
+    mockBackend();
+    const fallback = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, input?: unknown) => {
+      if (command === "cleanup_history") {
+        const request = JSON.parse(new TextDecoder().decode(input as Uint8Array));
+        return Promise.resolve(request.cursor ? {records:[old],nextCursor:null} : {records:[],nextCursor:cursor});
+      }
+      if (command === "undo_cleanup") return Promise.resolve({...old,items:[{...old.items[0],state:"restored"}]});
+      return fallback(command,input);
+    });
+    render(<CleanupPreviewPage />);
+    await screen.findByRole("checkbox");
+    fireEvent.click(screen.getByRole("button",{name:"Older cleanup history"}));
+    fireEvent.click(await screen.findByRole("button",{name:"Undo historical cleanup"}));
+    await waitFor(() => expect(screen.queryByRole("button",{name:"Undo historical cleanup"})).toBeNull());
+    expect(invoke).toHaveBeenCalledWith("undo_cleanup",{executionId:old.executionId});
+    expect(invoke.mock.calls.filter(([command]) => command === "cleanup_history")).toHaveLength(2);
+    expect(invoke.mock.calls.filter(([command]) => command === "preview_cleanup")).toHaveLength(1);
+    expect(screen.getByText("End of cleanup history.")).toBeTruthy();
+  });
+
+  it("keeps scan selection and successful cleanup when history fails", async () => {
+    mockBackend();
+    const fallback = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, input?: unknown) => command === "cleanup_history" ? Promise.reject(new Error("private history path")) : fallback(command,input));
+    render(<CleanupPreviewPage />);
+    fireEvent.click(await screen.findByRole("checkbox"));
+    expect(screen.getByText("1 of 1 selected")).toBeTruthy();
+    expect(await screen.findByText(/History could not be loaded/)).toBeTruthy();
+    expect(screen.queryByText("Cleanup could not continue")).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"Move to Recycle Bin"}));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button",{name:"Move to Recycle Bin"}));
+    expect(await screen.findByRole("heading",{name:"Latest cleanup"})).toBeTruthy();
+    expect(document.body.textContent).not.toContain("private history path");
+  });
+
   it("never renders rejected backend path details", async () => {
     invoke.mockImplementation((command: string) => command === "cleanup_history"
-      ? Promise.resolve([])
+      ? Promise.resolve({ records: [], nextCursor: null })
       : Promise.reject({ path: "C:\\Users\\private\\secret", detail: "raw OS failure" }));
     render(<CleanupPreviewPage />);
     const alerts = await screen.findAllByRole("alert");
     expect(alerts.some((alert) => alert.textContent?.includes("could not continue"))).toBe(true);
     expect(document.body.textContent).not.toContain("secret");
     expect(document.body.textContent).not.toContain("raw OS failure");
+  });
+
+  it("renders Spanish copy inside an es-MX provider", async () => {
+    mockBackend({ ...preview, records: [] }, projectDiscovery, []);
+    render(<I18nProvider languages={["es-MX"]}><CleanupPreviewPage /></I18nProvider>);
+    expect(screen.getByRole("heading", { name: "Limpieza" })).toBeTruthy();
+    expect(screen.getByLabelText("Agrega una ruta absoluta de proyecto")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "No se encontró nada" })).toBeTruthy();
   });
 });

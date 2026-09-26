@@ -172,6 +172,7 @@ pub fn discover(
         full.extend(duplicates::digest_groups(hashed));
     }
     context.phase(StoragePhase::Finalizing);
+    duplicates::rank_by_reclaimable(&mut full);
     let mut retained = 0;
     for (digest, group) in full {
         if context.cancellation.is_cancelled() {

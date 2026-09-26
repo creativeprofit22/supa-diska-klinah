@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { resolve, relative, isAbsolute } from "node:path";
 
 const parityPath = resolve(import.meta.dirname, "..", "docs", "parity.md");
 const document = readFileSync(parityPath, "utf8");
@@ -82,12 +82,70 @@ verifyInventory(storageRows, [
   "Rule cleaner", "Disk analyzer", "Large files", "Duplicates", "Empty folders",
   "Application uninstaller", "Browser cache cleanup", "Drive inventory",
 ], "storage capability");
+const projectRoot = realpathSync(resolve(import.meta.dirname, ".."));
+function requireActualFixture(reference) {
+  const parts = reference.split("::");
+  if (parts.length !== 2 || !/^\w+$/.test(parts[1])) fail(`invalid fixture reference: ${reference}`);
+  const file = parts[0] === "storage_parity" ? "src-tauri/crates/cleanup-core/tests/storage_parity.rs" : parts[0];
+  if (!/^src-tauri\/(?:[\w-]+\/)*[\w-]+\.rs$/.test(file)) fail(`fixture must name a Rust test source: ${reference}`);
+  let source;
+  try {
+    const path = realpathSync(resolve(projectRoot, file));
+    const within = relative(projectRoot, path);
+    if (within.startsWith("..") || isAbsolute(within)) fail(`fixture escapes project: ${reference}`);
+    source = readFileSync(path, "utf8");
+  } catch { fail(`missing fixture source: ${reference}`); }
+  if (!new RegExp(`\\bfn\\s+${parts[1]}\\s*\\(`).test(source)) fail(`missing fixture function: ${reference}`);
+}
 for (const row of storageRows) {
   if (!row[1].includes("src/main/ipc/") || !row[4].includes("storage_parity::")) {
     fail(`storage capability needs pinned source and parity fixture mapping: ${row[0]}`);
   }
+  const references = [...row[4].matchAll(/`([^`]+)`/g)].map(match => match[1]);
+  if (!references.length) fail(`storage capability needs executable fixture references: ${row[0]}`);
+  references.forEach(requireActualFixture);
   if (row[6] === "Verified" && row[5] !== "Implemented") {
     fail(`unimplemented storage capability cannot be verified: ${row[0]}`);
+  }
+}
+// ADR 0003 protection rows: every row cites real Rust fixtures and stays
+// unverified until manual Windows acceptance is recorded.
+const protectionRows = rowsAfter(
+  "| Protection feature | Pinned Kudu behavior | Supported behavior | Exclusions and adaptations | Required fixtures | Implementation status | Verification status |",
+);
+verifyInventory(protectionRows, [
+  "Process inspection", "Suspicious-file scan", "Quarantine", "Signature updates",
+  "Breach check", "Defender and AMSI", "Kudu cloud features",
+], "protection capability");
+for (const row of protectionRows) {
+  const references = [...row[4].matchAll(/`([^`]+)`/g)].map(match => match[1]);
+  if (!references.length) fail(`protection capability needs executable fixture references: ${row[0]}`);
+  references.forEach(requireActualFixture);
+  if (row[6] === "Verified" && !/\bAccepted\b/.test(readFileSync(resolve(projectRoot, "docs/verification/protection.md"), "utf8"))) {
+    fail(`protection capability cannot be verified before manual acceptance: ${row[0]}`);
+  }
+}
+// Implemented module rows must name targets that exist in the tree.
+function existsInProject(path) {
+  try {
+    return statSync(resolve(projectRoot, path));
+  } catch {
+    return null;
+  }
+}
+for (const row of [...moduleRows, ...directRows].filter((candidate) => candidate[5] === "Implemented")) {
+  const command = row[2].match(/^`commands::(\w+)`$/)?.[1];
+  const rust = row[3].match(/^`windows-platform::([\w:]+)`$/)?.[1];
+  const feature = row[4].match(/^`features\/([\w-]+)`$/)?.[1];
+  if (!command || !existsInProject(`src-tauri/src/commands/${command}.rs`)) {
+    fail(`implemented row names a missing command module: ${row[0]}`);
+  }
+  const rustPath = `src-tauri/crates/windows-platform/src/${rust?.replaceAll("::", "/")}`;
+  if (!rust || !(existsInProject(`${rustPath}.rs`) || existsInProject(`${rustPath}/mod.rs`))) {
+    fail(`implemented row names a missing Rust module: ${row[0]}`);
+  }
+  if (!feature || !existsInProject(`src/features/${feature}`)?.isDirectory()) {
+    fail(`implemented row names a missing frontend feature: ${row[0]}`);
   }
 }
 console.log("Kudu parity contract verified.");

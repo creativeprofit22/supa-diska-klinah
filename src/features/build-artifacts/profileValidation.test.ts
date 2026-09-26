@@ -1,6 +1,7 @@
 import storage from "../../../src-tauri/crates/windows-platform/src/cleanup/storage.rs?raw";
 import { describe, expect, it } from "vitest";
 import * as validation from "./profileValidation";
+import { buildArtifactsStrings } from "./strings";
 
 describe("build profile validation parity", () => {
   it("matches the authoritative Rust byte and count limits", () => {
@@ -31,5 +32,17 @@ describe("build profile validation parity", () => {
     expect(validation.textError("", 4096)).toBeUndefined();
     expect(validation.textError("a\0", 4096)).toBeTruthy();
     expect(validation.textError("a\u0085", 1024, true)).toBeTruthy();
+  });
+
+  it("defaults to English messages and uses the supplied catalog", () => {
+    const es = buildArtifactsStrings.es419.validation;
+    expect(validation.textError("a\0", 4096)).toBe("Null characters are not allowed.");
+    expect(validation.textError("", 1024, true, es)).toBe(es.enterLabel);
+    expect(validation.textError("ab", 1, false, es)).toBe(es.tooManyBytes(1));
+    expect(validation.artifactPathErrors(["../target"])).toEqual([
+      "Enter a relative path without a root, drive prefix, or parent components.",
+    ]);
+    expect(validation.artifactPathErrors(["target", "target/app"], es)).toEqual([es.overlappingPath, es.overlappingPath]);
+    expect(validation.artifactPathErrors(["C:\\target"], es)).toEqual([es.invalidRelativePath]);
   });
 });

@@ -58,6 +58,10 @@ impl From<BrokerError> for SecurityCommandError {
                 "systemRestoreFailure",
                 "Windows System Restore could not create the restore point.",
             ),
+            BrokerError::ResponseLost => (
+                "responseLost",
+                "The privileged helper stopped responding; check System Restore before retrying.",
+            ),
         };
         Self { code, message }
     }
@@ -93,6 +97,7 @@ mod tests {
             (BrokerError::InvalidRequest, "invalidRequest"),
             (BrokerError::PrivilegeFailure, "privilegeFailure"),
             (BrokerError::SystemRestoreFailure, "systemRestoreFailure"),
+            (BrokerError::ResponseLost, "responseLost"),
         ] {
             let command_error = SecurityCommandError::from(error);
             assert_eq!(command_error.code, expected_code);

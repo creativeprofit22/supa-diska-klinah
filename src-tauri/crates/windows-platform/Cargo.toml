@@ -2,27 +2,54 @@
 name = "windows-platform"
 version = "0.1.0"
 edition = "2024"
+publish = false
 rust-version = "1.90"
 license = "MIT"
 
 [dependencies]
 cleanup-core = { path = "../cleanup-core" }
+protection-core = { path = "../protection-core" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 trash = "=5.2.6"
 getrandom = "=0.3.4"
 sha2 = "=0.10.9"
 zeroize = "=1.9.0"
-windows-sys = { version = "=0.61.2", features = [
+windows = { version = "=0.61.3", default-features = false, features = [
   "Win32_Foundation",
+  "Win32_NetworkManagement_WindowsFirewall",
+  "Win32_Networking_WinHttp",
+  "Win32_System_Com",
+  "Win32_System_Ole",
+  "Win32_System_TaskScheduler",
+  "Win32_System_UpdateAgent",
+  "Win32_System_Variant",
+  "Win32_System_Wmi",
+  "Win32_UI_Shell",
+] }
+windows-sys = { version = "=0.61.2", features = [
+  "Wdk_Storage_FileSystem",
+  "Win32_Devices_DeviceAndDriverInstallation",
+  "Win32_System_IO",
+  "Win32_Foundation",
+  "Win32_Globalization",
   "Win32_Security",
   "Win32_Security_Authorization",
+  "Win32_Security_Cryptography",
+  "Win32_Security_Cryptography_Catalog",
+  "Win32_Security_Cryptography_Sip",
+  "Win32_Security_WinTrust",
   "Win32_Storage_FileSystem",
+  "Win32_System_Antimalware",
   "Win32_System_Com",
   "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Ioctl",
   "Win32_System_JobObjects",
   "Win32_System_LibraryLoader",
+  "Win32_System_Power",
+  "Win32_System_ProcessStatus",
   "Win32_System_Registry",
+  "Win32_System_Services",
   "Win32_System_Threading",
   "Win32_System_SystemInformation",
   "Win32_System_WindowsProgramming",
@@ -32,3 +59,4 @@ windows-sys = { version = "=0.61.2", features = [
 
 [dev-dependencies]
 junction = "=2.0.0"
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std"] }

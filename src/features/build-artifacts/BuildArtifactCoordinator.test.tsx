@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { BuildArtifactCoordinator } from "./BuildArtifactCoordinator";
 import type { BuildProfile } from "./api";
 
@@ -325,5 +326,15 @@ describe("BuildArtifactCoordinator", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(current.cancel).toHaveBeenCalledOnce();
     expect(screen.getByText(/Latest build: running/)).toBeTruthy();
+  });
+
+  it("renders Spanish labels inside the es-419 provider", async () => {
+    listProjectRoots.mockResolvedValue([{ id: "root", displayPath: "C:\\project" }]);
+    useBuildArtifacts.mockReturnValue(state());
+    render(<I18nProvider languages={["es-MX"]}><BuildArtifactCoordinator /></I18nProvider>);
+
+    expect(await screen.findByRole("heading", { name: "Presupuestos de artefactos de compilación" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Revisar y registrar perfil" })).toBeTruthy();
+    expect(screen.getByText("Estado de compilación incremental")).toBeTruthy();
   });
 });

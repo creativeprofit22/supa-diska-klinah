@@ -1,0 +1,47 @@
+# cargo-deny policy (run in CI by EmbarkStudios/cargo-deny-action, pinned by SHA).
+# Scope: the shipped Windows x64/ARM64 targets.
+
+[graph]
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]
+all-features = false
+
+[advisories]
+# Any RustSec vulnerability, unsoundness or yanked crate fails the build.
+# Unmaintained notices are reported for crates we depend on directly.
+unmaintained = "workspace"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive licences plus MPL-2.0 (file-level copyleft; unmodified use is fine).
+# Derived from the locked dependency inventory; adding a licence is a reviewed change.
+allow = [
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+  "0BSD",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# Workspace crates are unpublished and carry no licence field.
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# Path dependencies inside the workspace are not wildcards.
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io; no git or alternative registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

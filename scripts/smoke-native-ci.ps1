@@ -4,7 +4,8 @@ param(
   [string]$Target,
   [string]$Directory,
   [string]$ArtifactDirectory,
-  [string]$BuildRevision
+  [string]$BuildRevision,
+  [switch]$StorageSmoke
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,9 +40,21 @@ try {
   $credential = [Management.Automation.PSCredential]::new("$env:COMPUTERNAME\$username", $securePassword)
   $profilePath = Join-Path $env:SystemDrive "Users\$username"
   $script = Join-Path $PSScriptRoot "smoke-native.ps1"
+  $storageScript = Join-Path $PSScriptRoot "smoke-storage-root.ps1"
   $commandPath = Join-Path $smokeTempPath "run-smoke.ps1"
   $innerArtifacts = Join-Path $smokeTempPath "artifacts"
   $directoryArgument = if ($Directory) { " -Directory '$($Directory.Replace("'", "''"))'" } else { "" }
+  # The expanded storage smoke runs inside this single owned standard-user session,
+  # against the same executable the native discovery smoke just launched.
+  $storageDirectory = if ($Directory) { $Directory } else { "src-tauri/target/$Target/debug" }
+  $storageExecutable = Join-Path $storageDirectory "supa-diska-klinah.exe"
+  $storageArtifacts = Join-Path $innerArtifacts "storage-root"
+  $storageCommand = if ($StorageSmoke) {
+    "& '$($storageScript.Replace("'", "''"))' -Executable '$($storageExecutable.Replace("'", "''"))' -ArtifactDirectory '$($storageArtifacts.Replace("'", "''"))'"
+  }
+  else {
+    ""
+  }
   @"
 `$env:USERPROFILE = '$profilePath'
 `$env:HOME = `$env:USERPROFILE
@@ -51,7 +64,16 @@ try {
 `$env:APPDATA = '$profilePath\AppData\Roaming'
 `$env:TEMP = '$($smokeTempPath.Replace("'", "''"))'
 `$env:TMP = `$env:TEMP
-& '$($script.Replace("'", "''"))' -Target '$Target'$directoryArgument -ArtifactDirectory '$($innerArtifacts.Replace("'", "''"))' -BuildRevision '$BuildRevision'
+`$ErrorActionPreference = 'Stop'
+try {
+  & '$($script.Replace("'", "''"))' -Target '$Target'$directoryArgument -ArtifactDirectory '$($innerArtifacts.Replace("'", "''"))' -BuildRevision '$BuildRevision'
+  $storageCommand
+}
+catch {
+  [Console]::Error.WriteLine((`$_ | Out-String))
+  exit 1
+}
+exit 0
 "@ | Set-Content -Path $commandPath -Encoding UTF8
 
   $shell = (Get-Process -Id $PID).Path
@@ -59,10 +81,16 @@ try {
 
   [Console]::Out.Write((Get-Content -Path $stdoutPath -Raw))
   [Console]::Error.Write((Get-Content -Path $stderrPath -Raw))
-  $evidence = @(Get-ChildItem -LiteralPath $innerArtifacts -File -ErrorAction SilentlyContinue)
+  $evidence = @(Get-ChildItem -LiteralPath $innerArtifacts -File -Recurse -ErrorAction SilentlyContinue)
   if ($evidence.Count -gt 0) {
     New-Item -ItemType Directory -Path $ArtifactDirectory -Force | Out-Null
-    Copy-Item -LiteralPath $evidence.FullName -Destination $ArtifactDirectory -Force
+    $artifactRoot = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
+    foreach ($item in $evidence) {
+      $relative = [IO.Path]::GetRelativePath($innerArtifacts, $item.FullName)
+      $destination = Join-Path $artifactRoot $relative
+      New-Item -ItemType Directory -Path (Split-Path -Path $destination -Parent) -Force | Out-Null
+      Copy-Item -LiteralPath $item.FullName -Destination $destination -Force
+    }
   }
   if ($process.ExitCode -ne 0) {
     throw "The standard-user smoke process exited with code $($process.ExitCode)."

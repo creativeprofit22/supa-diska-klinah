@@ -2,7 +2,7 @@
 
 This checklist gates the alpha on Windows 10 x64. Never invoke `SRSetRestorePointW` in CI; automated checks cannot replace the two local observations below.
 
-**Scope:** August alpha results are historical. The September build-artifact candidate remains **VERIFY-BEFORE-SHIP** with four open native requirements in the build artifact budget drill below. No historical pass certifies current HEAD or a later rebuild.
+**Scope:** August alpha results are historical. The four native requirements of the build artifact budget drill below were accepted by the user on 2026-09-26 on the installed unsigned release candidate; the release itself stays gated by [release verification](verification/release.md). No historical pass certifies current HEAD or a later rebuild.
 
 ## Candidate
 
@@ -21,6 +21,13 @@ Use one identifiable x64 candidate for every check.
 
 - [x] Hardened helper, frontend, Rust, security-boundary, and x64 smoke checks pass.
 - [x] The main app starts at standard integrity with its adjacent helper present.
+
+## Signing mode
+
+The release pipeline runs in the mode declared in [release](release.md) (`Current signing mode: unsigned`).
+
+- **Unsigned path (current):** `verify-windows-release.ps1 -SigningMode unsigned` requires the installer, app and helper to be `NotSigned`; release notes carry the unsigned notice and verification steps. Evidence for the current candidate is in [release verification](verification/release.md).
+- **Signed path — pending certificate:** `-SigningMode authenticode` with the expected thumbprint and subject, plus a timestamp. Not yet run; follow [Turning on code signing](release.md#turning-on-code-signing) first.
 
 ## Successful restore-point run
 
@@ -71,7 +78,7 @@ Observed: the test used uniquely named synthetic files under the Windows tempora
 
 ## Build artifact budget drill
 
-**Current release status: VERIFY-BEFORE-SHIP.** The checked results below describe only the 2026-09-05 executable identified by its hash, not current HEAD, a rebuilt app, or an installer. Four native requirements remain open: budget enforcement/quarantine, protected artifact identities during enforcement, build-generation undo, and the complete screenshot set. The older alpha pass later in this document applies to its separate August candidate.
+**Current release status: drill accepted 2026-09-26; release still gated by [release verification](verification/release.md).** The 2026-09-05 items below describe only that executable, identified by its hash. The four items dated 2026-09-26 (budget enforcement/quarantine, protected artifact identities during enforcement, build-generation undo, and the complete screenshot set) were run on the installed per-machine candidate. They were repeated on the rebuilt installer carrying the protected-list layout fix, and the user accepted them; the full evidence is in release verification. The older alpha pass later in this document applies to its separate August candidate.
 
 Use the checked-in Rust fixture or a newly copied disposable project. Never register a shell, script host, personal repository wrapper, or executable you do not trust.
 
@@ -79,11 +86,11 @@ Use the checked-in Rust fixture or a newly copied disposable project. Never regi
 - [x] Decline one native registration and confirm its unique new profile does not persist. User reported a manual decision on 2026-09-05; read-only verification independently observed “The native approval was declined.”, dialog closure, and absence of `Cargo native No 20260905T182228Z` from Saved profiles and the unchanged registry. Automated No actions: zero; the manual click itself was not independently observed. Evidence: `.gg/artifacts/cargo-native-decline-20260905T181750Z/manual-decision-check-20260905T1900/` (`outcome.json`, `rejection-status.json`, `current-main.png`). Fixture hashes match the prior owner-audit snapshot; automatic budgets remained disabled. This closes only the decline item; the remaining release drill stays open.
 - [x] Cancel one running profile and confirm no success stamp or cleanup occurs. Verified through packaged-app Run/Cancel controls on 2026-09-05 using the existing approved disposable Cargo profile and a fixture-only 90-second build script. Real Cargo/build-script execution was observed; all captured build descendants, including conhost, were absent when cancelled was observed. Success-stamp ledger, complete storage hashes, journal/quarantine inventory, and profiles remained unchanged; automatic budgets stayed disabled. Evidence: `.gg/artifacts/cargo-cancel-20260905T191240Z/` (`report.md`, `outcome.json`, `running.png`, `cancelled.png`, before/after snapshots). Only this cancellation item is closed; the overall drill remains open.
 - [x] Run one successful direct Cargo profile and record the fixed status only, not child output. Native evidence: `.gg/artifacts/cargo-visible-20260905T165001933Z/cargo-first-status.json`, `cargo-first.png`, and `outcome-final.json`; actual Run action and fixed `succeeded, exit code 0` status, not simulated smoke.
-- [ ] Create an old owned release generation, enable a tight budget, and confirm only that generation enters quarantine.
-- [ ] Confirm current debug output, dependencies, and incremental identities survive enforcement.
+- [x] (Accepted by the user 2026-09-26.) Create an old owned release generation, enable a tight budget, and confirm only that generation enters quarantine. Installed build: executions `abdd5d97…` and, on the rebuilt installer, `b84b5566…` each quarantined only `target/release/artifact-budget-fixture.exe` with a 7-day `purgeAfter`. Evidence: `.gg/smoke-artifacts/release-drill-budget/` and `release-drill-budget-retake/`.
+- [x] (Accepted by the user 2026-09-26.) Confirm current debug output, dependencies, and incremental identities survive enforcement. Per-file SHA-256/size/mtime snapshots: every file other than the selected release exe was identical after enforcement (108/108, and 37/37 on the rebuilt installer).
 - [x] Run the same debug profile again and confirm the unchanged binary remains a warm build. Native evidence: `.gg/artifacts/cargo-visible-20260905T165001933Z/cargo-second-status.json`, `first-identities.json`, `second-identities.json`, and `warm-comparison.json`; all 18 recorded artifact identities/bytes/mtimes match. This proves warm state only with budgets disabled, not survival during enforcement.
-- [ ] Undo the quarantined release generation before its purge deadline.
-- [ ] Record disabled, selected-preview, protected-floor, running, and cancelled native smoke screenshots.
+- [x] (Accepted by the user 2026-09-26.) Undo the quarantined release generation before its purge deadline. `undo_cleanup` restored the exe with the original SHA-256 in both runs.
+- [x] (Accepted by the user 2026-09-26.) Record disabled, selected-preview, protected-floor, running, and cancelled native smoke screenshots. `.gg/smoke-artifacts/release-drill-budget/01`–`05*.png`; `03-protected-floor.png` was retaken after the layout fix in `release-drill-budget-retake/`.
 
 Automated fixture tests provide regression coverage. They do not replace native approval, decline, cancellation, direct Cargo, undo, or incremental-state observations on the release candidate.
 

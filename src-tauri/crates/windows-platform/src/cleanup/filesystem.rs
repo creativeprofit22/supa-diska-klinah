@@ -189,6 +189,82 @@ pub struct IdentityGuard {
 }
 
 impl IdentityGuard {
+    /// Native-only recovery target; the executor must derive it from its private store/IDs.
+    pub(crate) fn rename_to_recovery(self, destination: &Path) -> Result<(), FsError> {
+        self.rename_pinned(destination, None, true)
+    }
+
+    /// Restore only beneath the original, still-identical authorized root.
+    pub(crate) fn rename_to_original(
+        self,
+        root: &cleanup_core::storage::RootAuthorization,
+        destination: &Path,
+    ) -> Result<(), FsError> {
+        self.rename_pinned(destination, Some(root), true)
+    }
+
+    fn rename_pinned(
+        self,
+        destination: &Path,
+        root: Option<&cleanup_core::storage::RootAuthorization>,
+        create: bool,
+    ) -> Result<(), FsError> {
+        use windows_sys::{
+            Wdk::Storage::FileSystem::{
+                FILE_RENAME_INFORMATION, FileRenameInformation, NtSetInformationFile,
+            },
+            Win32::{Foundation::RtlNtStatusToDosError, System::IO::IO_STATUS_BLOCK},
+        };
+        let source = metadata_from_information(self.target.information()?)?;
+        if source.kind != EntryKind::File {
+            return Err(rename_rejected());
+        }
+        let parents = pin_destination_parents(destination, root, create)?;
+        let parent = parents.last().ok_or_else(rename_rejected)?;
+        let parent_info = metadata_from_information(parent.information()?)?;
+        if source.identity.map(|id| id.volume) != parent_info.identity.map(|id| id.volume) {
+            return Err(rename_rejected());
+        }
+        let name = rename_component(destination.file_name().ok_or_else(rename_rejected)?)?;
+        // Like Rust std's handle-relative Windows rename, call the native API:
+        // the Win32 wrapper rejects this RootDirectory form with error 87.
+        let bytes = (mem::offset_of!(FILE_RENAME_INFORMATION, FileName) + name.len() * 2)
+            .max(mem::size_of::<FILE_RENAME_INFORMATION>());
+        // A usize buffer provides native pointer alignment, including on 32-bit Windows.
+        let mut buffer = vec![
+            0_usize;
+            bytes
+                .max(mem::size_of::<FILE_RENAME_INFORMATION>())
+                .div_ceil(mem::size_of::<usize>())
+        ];
+        // SAFETY: aligned, zeroed storage holds the header and bounded UTF-16 tail.
+        // Both sets of ancestors and the original DELETE handle stay live through the call.
+        let status = unsafe {
+            let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
+            (*info).Anonymous.ReplaceIfExists = false;
+            (*info).RootDirectory = parent.0;
+            (*info).FileNameLength = (name.len() * 2) as u32;
+            ptr::copy_nonoverlapping(
+                name.as_ptr(),
+                ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
+                name.len(),
+            );
+            NtSetInformationFile(
+                self.target.0,
+                &mut IO_STATUS_BLOCK::default(),
+                info.cast(),
+                bytes as u32,
+                FileRenameInformation,
+            )
+        };
+        if status < 0 {
+            // SAFETY: pure NTSTATUS-to-Win32 error conversion; no handle ownership changes.
+            let code = unsafe { RtlNtStatusToDosError(status) };
+            return Err(FsError::from(io::Error::from_raw_os_error(code as i32)));
+        }
+        Ok(())
+    }
+
     /// Read the already pinned target, never reopen its pathname or drop guards.
     pub fn read_at(&self, buffer: &mut [u8], offset: u64) -> Result<usize, FsError> {
         use std::os::windows::{fs::FileExt, io::FromRawHandle};
@@ -216,6 +292,36 @@ impl IdentityGuard {
 }
 
 impl WindowsFileSystem {
+    /// Pins and verifies original identity/size/mtime at a native recovery location.
+    /// Dropping this guard without renaming is a non-mutating reconciliation check.
+    pub(crate) fn guard_relocated_file(
+        &self,
+        recovery_path: &Path,
+        expected: &cleanup_core::storage::ObservedEntry,
+    ) -> Result<IdentityGuard, FsError> {
+        if expected.kind != EntryKind::File {
+            return Err(rename_rejected());
+        }
+        let ancestors = pin_destination_parents(recovery_path, None, false)?;
+        let target = OwnedHandle::open_with_share(recovery_path, DELETE, FILE_SHARE_READ)?;
+        let info = metadata_from_information(target.information()?)?;
+        if info.kind != EntryKind::File
+            || info.identity != Some(expected.identity)
+            || info.size != expected.logical_bytes
+            || info
+                .modified
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .and_then(|d| u64::try_from(d.as_nanos()).ok())
+                != Some(expected.modified_unix_nanos)
+        {
+            return Err(rename_rejected());
+        }
+        Ok(IdentityGuard {
+            target,
+            _ancestors: ancestors,
+        })
+    }
+
     pub fn guard_entry(
         &self,
         root: &cleanup_core::storage::RootAuthorization,
@@ -300,6 +406,103 @@ impl WindowsFileSystem {
             _ancestors: ancestors,
         })
     }
+}
+
+fn rename_rejected() -> FsError {
+    FsError::new(FsErrorKind::Changed, "recovery rename guard rejected")
+}
+
+fn rename_component(name: &OsStr) -> Result<Vec<u16>, FsError> {
+    let name: Vec<_> = name.encode_wide().collect();
+    if name.is_empty()
+        || name.len() > 255
+        || name
+            .iter()
+            .any(|c| [0, b':' as u16, b'/' as u16, b'\\' as u16].contains(c))
+        || name == [b'.' as u16]
+        || name == [b'.' as u16, b'.' as u16]
+        || matches!(name.last(), Some(32 | 46))
+    {
+        return Err(rename_rejected());
+    }
+    Ok(name)
+}
+
+/// Walk from the volume root, retaining every no-follow, no-delete-share handle.
+/// Creation uses a pathname only after its entire parent chain is pinned; the
+/// result is reopened no-follow and link-like replacements are rejected.
+fn pin_destination_parents(
+    destination: &Path,
+    root: Option<&cleanup_core::storage::RootAuthorization>,
+    create: bool,
+) -> Result<Vec<OwnedHandle>, FsError> {
+    use std::path::Component;
+    if !cleanup_core::is_local_storage_path(destination) {
+        return Err(rename_rejected());
+    }
+    for component in destination.components() {
+        match component {
+            Component::Normal(name) => {
+                rename_component(name)?;
+            }
+            Component::Prefix(_) | Component::RootDir => {}
+            _ => return Err(rename_rejected()),
+        }
+    }
+    rename_component(destination.file_name().ok_or_else(rename_rejected)?)?;
+    if let Some(root) = root {
+        root.validate().map_err(|_| rename_rejected())?;
+        if !PathSemantics::CaseInsensitive.contains(&root.canonical_path, destination)
+            || PathSemantics::CaseInsensitive.equivalent(&root.canonical_path, destination)
+        {
+            return Err(rename_rejected());
+        }
+    }
+    let mut paths: Vec<_> = destination.ancestors().skip(1).collect();
+    if paths.is_empty() || paths.len() > 128 {
+        return Err(rename_rejected());
+    }
+    paths.reverse();
+    let mut handles = Vec::with_capacity(paths.len());
+    let mut root_seen = root.is_none();
+    for path in paths {
+        let handle = match OwnedHandle::open_with_share(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE)
+        {
+            Ok(handle) => handle,
+            Err(error)
+                if error.kind == FsErrorKind::NotFound
+                    && create
+                    && root_seen
+                    && !handles.is_empty() =>
+            {
+                // An existing raced-in ordinary directory is safe to pin; never follow a link.
+                match std::fs::create_dir(path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(FsError::from(error)),
+                }
+                OwnedHandle::open_with_share(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE)?
+            }
+            Err(error) => return Err(error),
+        };
+        let info = metadata_from_information(handle.information()?)?;
+        if info.kind != EntryKind::Directory || info.identity.is_none() {
+            return Err(rename_rejected());
+        }
+        if let Some(root) = root
+            && PathSemantics::CaseInsensitive.equivalent(path, &root.canonical_path)
+        {
+            if info.identity != Some(root.identity) {
+                return Err(rename_rejected());
+            }
+            root_seen = true;
+        }
+        handles.push(handle);
+    }
+    if !root_seen {
+        return Err(rename_rejected());
+    }
+    Ok(handles)
 }
 
 struct OwnedHandle(HANDLE);
@@ -598,6 +801,190 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn recovery_fixture(
+        temp: &Temp,
+    ) -> (
+        cleanup_core::storage::RootAuthorization,
+        cleanup_core::storage::ObservedEntry,
+    ) {
+        let root_path = temp.0.join("original");
+        std::fs::create_dir(&root_path).unwrap();
+        let root_path = std::fs::canonicalize(root_path).unwrap();
+        let path = root_path.join("file");
+        std::fs::write(&path, b"original contents").unwrap();
+        let metadata = WindowsFileSystem.metadata_no_follow(&path).unwrap();
+        (
+            cleanup_core::storage::RootAuthorization {
+                snapshot_id: "a".repeat(32),
+                root_id: "b".repeat(32),
+                identity: WindowsFileSystem
+                    .metadata_no_follow(&root_path)
+                    .unwrap()
+                    .identity
+                    .unwrap(),
+                canonical_path: root_path,
+            },
+            cleanup_core::storage::ObservedEntry {
+                canonical_path: path,
+                identity: metadata.identity.unwrap(),
+                kind: EntryKind::File,
+                logical_bytes: metadata.size,
+                allocated_bytes: None,
+                modified_unix_nanos: metadata
+                    .modified
+                    .unwrap()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as u64,
+            },
+        )
+    }
+
+    #[test]
+    fn recovery_move_restore_preserves_identity_contents_and_refuses_collisions() {
+        let temp = Temp::new();
+        let (root, entry) = recovery_fixture(&temp);
+        let recovery = std::fs::canonicalize(&temp.0)
+            .unwrap()
+            .join("recovery/execution/item");
+        let fs = WindowsFileSystem;
+        fs.guard_entry(&root, &entry, false)
+            .unwrap()
+            .rename_to_recovery(&recovery)
+            .unwrap();
+        assert!(!entry.canonical_path.exists());
+        assert_eq!(
+            fs.metadata_no_follow(&recovery).unwrap().identity,
+            Some(entry.identity)
+        );
+        assert_eq!(std::fs::read(&recovery).unwrap(), b"original contents");
+        // Reconciliation does not mutate the relocated file.
+        drop(fs.guard_relocated_file(&recovery, &entry).unwrap());
+        std::fs::write(&entry.canonical_path, b"occupied").unwrap();
+        assert!(
+            fs.guard_relocated_file(&recovery, &entry)
+                .unwrap()
+                .rename_to_original(&root, &entry.canonical_path)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&entry.canonical_path).unwrap(), b"occupied");
+        assert_eq!(std::fs::read(&recovery).unwrap(), b"original contents");
+        std::fs::remove_file(&entry.canonical_path).unwrap();
+        fs.guard_relocated_file(&recovery, &entry)
+            .unwrap()
+            .rename_to_original(&root, &entry.canonical_path)
+            .unwrap();
+        assert_eq!(
+            fs.metadata_no_follow(&entry.canonical_path)
+                .unwrap()
+                .identity,
+            Some(entry.identity)
+        );
+        assert_eq!(
+            std::fs::read(&entry.canonical_path).unwrap(),
+            b"original contents"
+        );
+        assert!(!recovery.exists());
+        std::fs::write(&recovery, b"occupied recovery").unwrap();
+        assert!(
+            fs.guard_entry(&root, &entry, false)
+                .unwrap()
+                .rename_to_recovery(&recovery)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&recovery).unwrap(), b"occupied recovery");
+        assert_eq!(
+            fs.metadata_no_follow(&entry.canonical_path)
+                .unwrap()
+                .identity,
+            Some(entry.identity)
+        );
+    }
+
+    #[test]
+    fn recovery_rejects_tampering_root_replacement_and_reparse_parents() {
+        let temp = Temp::new();
+        let (root, entry) = recovery_fixture(&temp);
+        let recovery = std::fs::canonicalize(&temp.0)
+            .unwrap()
+            .join("recovery/item");
+        let fs = WindowsFileSystem;
+        fs.guard_entry(&root, &entry, false)
+            .unwrap()
+            .rename_to_recovery(&recovery)
+            .unwrap();
+        let old_root = root.canonical_path.with_file_name("old-root");
+        std::fs::rename(&root.canonical_path, &old_root).unwrap();
+        std::fs::create_dir(&root.canonical_path).unwrap();
+        assert!(
+            fs.guard_relocated_file(&recovery, &entry)
+                .unwrap()
+                .rename_to_original(&root, &entry.canonical_path)
+                .is_err()
+        );
+        std::fs::remove_dir(&root.canonical_path).unwrap();
+        junction::create(&old_root, &root.canonical_path).unwrap();
+        assert!(
+            fs.guard_relocated_file(&recovery, &entry)
+                .unwrap()
+                .rename_to_original(&root, &entry.canonical_path)
+                .is_err()
+        );
+        junction::delete(&root.canonical_path).unwrap();
+        std::fs::remove_dir(&root.canonical_path).unwrap();
+        std::fs::rename(&old_root, &root.canonical_path).unwrap();
+        let link = root.canonical_path.join("link");
+        junction::create(recovery.parent().unwrap(), &link).unwrap();
+        assert!(fs.guard_relocated_file(&link.join("item"), &entry).is_err());
+        assert!(
+            fs.guard_relocated_file(&recovery, &entry)
+                .unwrap()
+                .rename_to_original(&root, &link.join("restored"))
+                .is_err()
+        );
+        junction::delete(&link).unwrap();
+        std::fs::remove_dir(&link).unwrap();
+        std::fs::write(&recovery, b"tampered").unwrap();
+        assert!(fs.guard_relocated_file(&recovery, &entry).is_err());
+        std::fs::rename(&recovery, recovery.with_file_name("old-item")).unwrap();
+        std::fs::write(&recovery, b"original contents").unwrap();
+        assert!(fs.guard_relocated_file(&recovery, &entry).is_err());
+        assert!(!entry.canonical_path.exists());
+    }
+
+    #[test]
+    fn recovery_rejects_directories_and_unsafe_names() {
+        let temp = Temp::new();
+        let (root, mut entry) = recovery_fixture(&temp);
+        std::fs::remove_file(&entry.canonical_path).unwrap();
+        std::fs::create_dir(&entry.canonical_path).unwrap();
+        entry.kind = EntryKind::Directory;
+        entry.identity = WindowsFileSystem
+            .metadata_no_follow(&entry.canonical_path)
+            .unwrap()
+            .identity
+            .unwrap();
+        let destination = root.canonical_path.join("recovery/item");
+        assert!(
+            WindowsFileSystem
+                .guard_entry(&root, &entry, false)
+                .unwrap()
+                .rename_to_recovery(&destination)
+                .is_err()
+        );
+        assert!(entry.canonical_path.is_dir());
+        assert!(!destination.exists());
+        assert!(
+            WindowsFileSystem
+                .guard_relocated_file(&entry.canonical_path, &entry)
+                .is_err()
+        );
+        for name in ["a:b", "a/b", "a\\b", "a\0b", ".", "..", "a.", "a "] {
+            assert!(rename_component(OsStr::new(name)).is_err());
+        }
+        assert!(rename_component(OsStr::new(&"a".repeat(256))).is_err());
     }
 
     #[test]

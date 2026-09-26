@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm build:helper && pnpm dev",
     "beforeBuildCommand": "pnpm build:helper && pnpm build",
-    "devUrl": "http://127.0.0.1:1420",
+    "devUrl": "http://127.0.0.1:1520",
     "frontendDist": "../dist",
     "removeUnusedCommands": true
   },
@@ -20,13 +20,14 @@
         "visible": false,
         "focus": false,
         "minWidth": 720,
-        "minHeight": 480
+        "minHeight": 480,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-networking --disable-component-update"
       }
     ],
     "security": {
       "capabilities": ["main"],
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self'; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
-      "devCsp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1420; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
+      "devCsp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1520; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
       "freezePrototype": true,
       "assetProtocol": {
         "enable": false
@@ -41,7 +42,10 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": "http://timestamp.digicert.com",
       "nsis": {
-        "installMode": "perMachine"
+        "installMode": "perMachine",
+        "languages": ["English", "Spanish"],
+        "displayLanguageSelector": false,
+        "installerHooks": "windows/installer-hooks.nsh"
       }
     }
   }

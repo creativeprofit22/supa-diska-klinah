@@ -38,7 +38,13 @@ fn catalog() -> Catalog {
     .expect("compiled browser catalog")
 }
 /// Backend disclosure/provenance, not a claim of upstream implementation equivalence.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BrowserPolicy {
+    pub minimum_age_seconds: u64,
+    pub exclusions: Vec<String>,
+    pub profile_cache_roots: Vec<String>,
+    pub shared_cache_roots: Vec<String>,
     pub source: String,
     pub revision: String,
     pub lifecycle: cleanup_core::Lifecycle,
@@ -50,6 +56,10 @@ pub struct BrowserPolicy {
 pub fn policy() -> BrowserPolicy {
     let c = catalog();
     BrowserPolicy {
+        minimum_age_seconds: c.minimum_age_seconds,
+        exclusions: c.exclusions,
+        profile_cache_roots: c.profile,
+        shared_cache_roots: c.shared,
         source: c.source,
         revision: c.revision,
         lifecycle: c.lifecycle,
@@ -143,6 +153,12 @@ struct Layout {
     firefox: bool,
     direct: bool,
     profile_base: Option<PathBuf>,
+}
+pub(crate) fn native_scope_paths() -> Result<Vec<(String, Option<PathBuf>)>, StorageError> {
+    Ok(layouts(&NativeKnownFolders)?
+        .into_iter()
+        .map(|layout| (layout.id, Some(layout.base)))
+        .collect())
 }
 fn layouts(resolver: &dyn KnownFolderResolver) -> Result<Vec<Layout>, StorageError> {
     let c = catalog();

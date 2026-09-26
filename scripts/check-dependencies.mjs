@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { hygieneFailures } from "./workflow-rules.mjs";
 
 function fail(message) {
   console.error(`Dependency check failed: ${message}`);
@@ -40,13 +41,28 @@ if (!cleanupCoreCargo.includes('serde_json = "=1.0.151"')) {
   fail("cleanup-core serde_json must remain pinned to 1.0.151");
 }
 
-const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
-const actionLines = workflow.split(/\r?\n/).filter((line) => line.trim().startsWith("uses:"));
-if (
-  actionLines.length === 0 ||
-  actionLines.some((line) => !/@[0-9a-f]{40}$/.test(line.trim()))
-) {
-  fail("every GitHub Action must use a full immutable commit SHA");
+// ADR 0003: the rule-pack signature verifier is a pinned crypto dependency.
+const protectionCoreCargo = readFileSync("src-tauri/crates/protection-core/Cargo.toml", "utf8");
+for (const required of ['ed25519-dalek = { version = "=2.2.0"', 'aho-corasick = { version = "=1.1.5"', 'sha2 = "=0.10.9"']) {
+  if (!protectionCoreCargo.includes(required)) fail(`protection-core must pin ${required}`);
+}
+
+const workflowFiles = readdirSync(".github/workflows")
+  .filter((name) => /\.ya?ml$/.test(name))
+  .sort();
+if (!workflowFiles.includes("ci.yml")) fail("missing .github/workflows/ci.yml");
+for (const name of workflowFiles) {
+  const workflow = readFileSync(`.github/workflows/${name}`, "utf8");
+  const actionLines = workflow.split(/\r?\n/).filter((line) => line.trim().startsWith("uses:"));
+  if (
+    actionLines.length === 0 ||
+    actionLines.some((line) => !/@[0-9a-f]{40}$/.test(line.trim()))
+  ) {
+    fail(`every GitHub Action in ${name} must use a full immutable commit SHA`);
+  }
+  // Least privilege per job and no credentials left on disk after checkout.
+  const failures = hygieneFailures(name, workflow);
+  if (failures.length > 0) fail(failures.join("\n"));
 }
 
 for (const lockfile of ["pnpm-lock.yaml", "src-tauri/Cargo.lock"]) {

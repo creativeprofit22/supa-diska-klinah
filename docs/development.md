@@ -21,7 +21,16 @@ pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
-The first Rust command may download the pinned toolchain and targets. Tauri sets the target and profile environment variables used by `scripts/build-privileged-helper.mjs`; that script builds with argv and no shell, then prepares Tauri's target-suffixed sidecar. Development allows exactly `http://127.0.0.1:1420`; packaged navigation remains local.
+The first Rust command may download the pinned toolchain and targets. Tauri sets the target and profile environment variables used by `scripts/build-privileged-helper.mjs`; that script builds with argv and no shell, then prepares Tauri's target-suffixed sidecar. Development allows exactly `http://127.0.0.1:1520`; packaged navigation remains local.
+
+## Fixed project ports
+
+- `pnpm dev` uses `http://127.0.0.1:1520` with strict binding.
+- `pnpm build`, then `pnpm preview`, uses `http://127.0.0.1:1521` with strict binding.
+- Neither server may fall back to another port. If its port is occupied, identify the owner; do not stop an unrelated process.
+- Storage route smoke defaults to preview port 1521. Set `STORAGE_UI_PORT=1520` only when intentionally testing the development server. Other values are rejected.
+- GG Coder's reserved ports are never used by this project's servers or smoke harness.
+- `pnpm check:ports` verifies resolved Vite settings and Tauri's matching development origin/HMR policy. Native navigation still rejects the preview origin.
 
 ## Verification
 

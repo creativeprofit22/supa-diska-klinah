@@ -52,8 +52,10 @@ pub fn discover(
         if context.cancellation.is_cancelled() {
             return Ok(());
         }
+        // Snapshot paging uses ascending keys; invert bytes for largest first
+        // while keeping deterministic ascending path/extension tie breakers.
         let order = RecordOrder {
-            numeric: 0,
+            numeric: u64::MAX - row.logical_bytes,
             text: row.display_path.to_lowercase(),
         };
         context.push(StorageRecord::Directory(row), order)?;
@@ -66,7 +68,7 @@ pub fn discover(
             return Ok(());
         }
         let order = RecordOrder {
-            numeric: 0,
+            numeric: u64::MAX - row.logical_bytes,
             text: row.extension.clone(),
         };
         context.push(StorageRecord::Extension(row), order)?;

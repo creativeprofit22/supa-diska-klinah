@@ -3,9 +3,23 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 
 vi.mock("../build-artifacts/ArtifactBudgetSettings", () => ({
   ArtifactBudgetSettings: () => <div>Artifact budget settings</div>,
+}));
+
+vi.mock("./ScanSpeedSettings", () => ({
+  ScanSpeedSettings: () => <div>Scan speed settings</div>,
+}));
+
+// Covered by LanguageSettings.test.tsx and UpdateSettings.test.tsx.
+vi.mock("./LanguageSettings", () => ({
+  LanguageSettings: () => <div>Language settings</div>,
+}));
+
+vi.mock("./UpdateSettings", () => ({
+  UpdateSettings: () => <div>Update settings</div>,
 }));
 
 const { getAutoCleanupPolicy, setAutoCleanupPolicy } = vi.hoisted(() => ({
@@ -85,5 +99,17 @@ describe("SettingsPage automatic cleanup policy", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("changes remain unsaved");
     expect((enabled as HTMLInputElement).checked).toBe(true);
     expect((screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe("Settings page localization", () => {
+  afterEach(() => cleanup());
+  it("renders Spanish copy for es-MX", async () => {
+    getAutoCleanupPolicy.mockResolvedValue({ enabled: false, graceDays: 7 });
+    render(<I18nProvider languages={["es-MX"]}><SettingsPage /></I18nProvider>);
+    expect(screen.getByRole("heading", { name: "Configuración" })).toBeTruthy();
+    expect(await screen.findByText("Limpiar cachés temporales al iniciar")).toBeTruthy();
+    expect(screen.getByRole("option", { name: "7 días" })).toBeTruthy();
+    expect(document.title).toBe("Configuración | Supa Diska Klinah");
   });
 });

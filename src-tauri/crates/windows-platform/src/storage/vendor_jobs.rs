@@ -6,7 +6,10 @@ use super::{
         VendorCommand,
     },
 };
-use crate::cleanup::CleanupStorage;
+use crate::{
+    cleanup::{CleanupStorage, StorageError},
+    history::{HistoryCursor, HistoryKind, HistoryPage, HistoryRequest},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{
@@ -16,8 +19,15 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-const MAX_JOURNALS: usize = 64;
-const MAX_COMPLETED: usize = 2;
+// simplification: one bounded ledger retains 1,000 outcomes; migrate to an indexed
+// journal store for further growth, never evict outcomes to admit another job.
+const MAX_JOURNALS: usize = 1_000;
+// Keep the shared atomic writer's 8 MiB safeguard unchanged.
+const MAX_LEDGER_BYTES: usize = 8 * 1024 * 1024;
+// Per retained journal: state (<=24 bytes), meaning (<=64), two u32 codes
+// (<=20), and updated_at (<=20) can all grow, including on reconciliation.
+// Reserving 256 bytes per journal conservatively covers every such transition.
+const TRANSITION_HEADROOM: usize = 256;
 const EXPIRY: u64 = 600;
 const WAIT_LIMIT: Duration = Duration::from_secs(30 * 60);
 
@@ -67,6 +77,9 @@ pub enum VendorJobError {
     ExecutableChanged,
     Storage,
     Limit,
+    HistoryCountCapacity,
+    HistorySizeCapacity,
+    InvalidHistoryRequest,
     Conflict,
 }
 
@@ -237,7 +250,7 @@ impl VendorJobManager {
             let _writer = writer.lock().map_err(|_| VendorJobError::Conflict)?;
             storage
                 .write_vendor_jobs(&ledger)
-                .map_err(|_| VendorJobError::Storage)?;
+                .map_err(persistence_error)?;
         }
         Ok(Self {
             shared: Arc::new(Shared {
@@ -283,12 +296,12 @@ impl VendorJobManager {
                 .state
                 .lock()
                 .map_err(|_| VendorJobError::Conflict)?;
-            prune(&mut state);
+            expire_prepared(&mut state);
             if state.active.is_some() {
                 return Err(VendorJobError::Busy);
             }
             if state.ledger.journals.len() >= MAX_JOURNALS {
-                return Err(VendorJobError::Limit);
+                return Err(VendorJobError::HistoryCountCapacity);
             }
             let program = selected;
             if state.ledger.journals.iter().any(|j| {
@@ -350,24 +363,103 @@ impl VendorJobManager {
             .map_err(|_| VendorJobError::Conflict)?;
         if cancel.load(Ordering::Acquire)
             || self.shared.shutdown.load(Ordering::Acquire)
-            || !state
-                .active
-                .as_ref()
-                .is_some_and(|a| a.id == reservation_id)
+            || state.active.as_ref().is_none_or(|a| a.id != reservation_id)
         {
             return Err(VendorJobError::Conflict);
         }
         let mut ledger = state.ledger.clone();
         ledger.journals.push(journal);
+        check_admission(&ledger)?;
         self.shared
             .storage
             .write_vendor_jobs(&ledger)
-            .map_err(|_| VendorJobError::Storage)?;
+            .map_err(persistence_error)?;
         state.ledger = ledger;
         state.active.as_mut().unwrap().worker = false;
         reservation.committed = true;
         Ok(job)
     }
+    /// Consent text is resolved by the backend, never supplied by the renderer.
+    pub fn confirm_native(&self, job_id: &str, owner: isize) -> Result<VendorJob, VendorJobError> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            IDYES, IsWindow, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, MessageBoxW,
+        };
+        if owner == 0 || unsafe { IsWindow(owner as _) } == 0 {
+            return Err(VendorJobError::Conflict);
+        }
+        let strings = crate::i18n::native();
+        self.confirm_with_strings(job_id, strings, |message| {
+            let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+            let title: Vec<u16> = strings
+                .confirm_vendor_uninstall_title
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
+            unsafe {
+                MessageBoxW(
+                    owner as _,
+                    text.as_ptr(),
+                    title.as_ptr(),
+                    MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING,
+                ) == IDYES
+            }
+        })
+    }
+
+    #[cfg(test)]
+    fn confirm_with(
+        &self,
+        job_id: &str,
+        prompt: impl FnOnce(&str) -> bool,
+    ) -> Result<VendorJob, VendorJobError> {
+        self.confirm_with_strings(job_id, crate::i18n::native(), prompt)
+    }
+
+    fn confirm_with_strings(
+        &self,
+        job_id: &str,
+        strings: &crate::i18n::NativeStrings,
+        prompt: impl FnOnce(&str) -> bool,
+    ) -> Result<VendorJob, VendorJobError> {
+        let journal = {
+            let state = self
+                .shared
+                .state
+                .lock()
+                .map_err(|_| VendorJobError::Conflict)?;
+            let journal = lookup(&state, job_id)?;
+            if journal.job.state != VendorJobState::AwaitingConfirmation
+                || !state.active.as_ref().is_some_and(|a| {
+                    a.id == job_id && !a.worker && !a.cancel.load(Ordering::Acquire)
+                })
+            {
+                return Err(VendorJobError::Conflict);
+            }
+            if now().saturating_sub(journal.job.created_at) >= EXPIRY {
+                return Err(VendorJobError::Expired);
+            }
+            journal.clone()
+        };
+        fresh(&self.shared, &journal)?;
+        // Debug quoting escapes controls, quotes and backslashes. Fail closed instead of
+        // truncating the command the user is being asked to approve.
+        let message = (strings.vendor_uninstall_body)(
+            &journal.job.program_name,
+            &journal.job.job_id,
+            journal.command.msi,
+            &journal.command.executable,
+            &journal.command.arguments,
+        );
+        if message.encode_utf16().count() > 16384 {
+            return Err(VendorJobError::Limit);
+        }
+        if prompt(&message) {
+            self.confirm(job_id)
+        } else {
+            self.cancel(job_id)
+        }
+    }
+
     /// The only launch request is a separately confirmed, backend-issued job ID.
     pub fn confirm(&self, job_id: &str) -> Result<VendorJob, VendorJobError> {
         let (journal, cancel) = {
@@ -440,7 +532,7 @@ impl VendorJobManager {
             .state
             .lock()
             .map_err(|_| VendorJobError::Conflict)?;
-        prune(&mut state);
+        expire_prepared(&mut state);
         let mut job = lookup(&state, job_id)?.job.clone();
         if job.state == VendorJobState::Launching
             && now().saturating_sub(job.updated_at) >= self.shared.timeout.as_secs().max(1)
@@ -500,30 +592,72 @@ impl VendorJobManager {
             return Err(VendorJobError::Busy);
         }
         let mut ledger = state.ledger.clone();
-        ledger.journals.retain(|j| j.job.job_id != job_id);
+        let journal = ledger
+            .journals
+            .iter_mut()
+            .find(|j| j.job.job_id == job_id)
+            .unwrap();
+        if journal.job.state.active() {
+            journal.job.state = VendorJobState::CancelledBeforeLaunch;
+            journal.job.updated_at = now();
+        }
+        journal.command = VendorCommand::default();
         self.shared
             .storage
             .write_vendor_jobs(&ledger)
-            .map_err(|_| VendorJobError::Storage)?;
+            .map_err(persistence_error)?;
         state.ledger = ledger;
         if state.active.as_ref().is_some_and(|a| a.id == job_id) {
             state.active = None;
         }
         Ok(())
     }
-    pub fn retained_jobs(&self) -> Result<Vec<VendorJob>, VendorJobError> {
+    pub fn history_page(
+        &self,
+        request: HistoryRequest,
+    ) -> Result<HistoryPage<VendorJob>, VendorJobError> {
+        let (cursor, limit) = request
+            .validate(HistoryKind::Vendor)
+            .map_err(|_| VendorJobError::InvalidHistoryRequest)?;
         let mut state = self
             .shared
             .state
             .lock()
             .map_err(|_| VendorJobError::Conflict)?;
-        prune(&mut state);
-        Ok(state
-            .ledger
-            .journals
-            .iter()
-            .map(|j| j.job.clone())
-            .collect())
+        expire_prepared(&mut state);
+        // Keep only a bounded page (+ one lookahead), not a second ledger-sized collector.
+        let mut selected: Vec<&VendorJob> = Vec::with_capacity(limit + 1);
+        for journal in &state.ledger.journals {
+            let job = &journal.job;
+            let key = (job.created_at, job.job_id.as_str());
+            if cursor
+                .as_ref()
+                .is_some_and(|c| key >= (c.timestamp, c.id.as_str()))
+            {
+                continue;
+            }
+            let index =
+                selected.partition_point(|other| (other.created_at, other.job_id.as_str()) > key);
+            if index <= limit {
+                selected.insert(index, job);
+                selected.truncate(limit + 1);
+            }
+        }
+        let more = selected.len() > limit;
+        selected.truncate(limit);
+        let next_cursor = if more {
+            let last = selected.last().unwrap();
+            Some(
+                HistoryCursor::encode(HistoryKind::Vendor, last.created_at, &last.job_id)
+                    .map_err(|_| VendorJobError::InvalidHistoryRequest)?,
+            )
+        } else {
+            None
+        };
+        Ok(HistoryPage {
+            records: selected.into_iter().cloned().collect(),
+            next_cursor,
+        })
     }
 }
 impl Drop for VendorJobManager {
@@ -578,7 +712,7 @@ fn lookup<'a>(state: &'a State, id: &str) -> Result<&'a Journal, VendorJobError>
         .find(|j| j.job.job_id == id)
         .ok_or(VendorJobError::InvalidId)
 }
-fn prune(state: &mut State) {
+fn expire_prepared(state: &mut State) {
     if state.active.as_ref().is_some_and(|a| {
         !a.worker
             && (a.cancel.load(Ordering::Acquire)
@@ -595,18 +729,25 @@ fn prune(state: &mut State) {
             j.job.state = VendorJobState::CancelledBeforeLaunch;
         }
     }
-    let mut retained_completed = 0;
-    let time = now();
-    state.ledger.journals.reverse();
-    state.ledger.journals.retain(|j| {
-        if j.job.state.active() || j.job.state == VendorJobState::OutcomeUnknown {
-            return true;
-        }
-        retained_completed += 1;
-        retained_completed <= MAX_COMPLETED && time.saturating_sub(j.job.updated_at) < EXPIRY
-    });
-    state.ledger.journals.reverse();
 }
+fn persistence_error(error: StorageError) -> VendorJobError {
+    match error {
+        StorageError::TooLarge => VendorJobError::HistorySizeCapacity,
+        _ => VendorJobError::Storage,
+    }
+}
+
+fn check_admission(ledger: &Ledger) -> Result<(), VendorJobError> {
+    if ledger.journals.len() > MAX_JOURNALS {
+        return Err(VendorJobError::HistoryCountCapacity);
+    }
+    let bytes = serde_json::to_vec(ledger).map_err(|_| VendorJobError::Storage)?;
+    if bytes.len() + ledger.journals.len() * TRANSITION_HEADROOM > MAX_LEDGER_BYTES {
+        return Err(VendorJobError::HistorySizeCapacity);
+    }
+    Ok(())
+}
+
 fn save_job(shared: &Shared, state: &mut State, job: VendorJob) -> Result<(), VendorJobError> {
     let mut ledger = state.ledger.clone();
     let journal = ledger
@@ -618,7 +759,7 @@ fn save_job(shared: &Shared, state: &mut State, job: VendorJob) -> Result<(), Ve
     shared
         .storage
         .write_vendor_jobs(&ledger)
-        .map_err(|_| VendorJobError::Storage)?;
+        .map_err(persistence_error)?;
     state.ledger = ledger;
     Ok(())
 }
@@ -783,7 +924,7 @@ fn run(shared: Arc<Shared>, id: String, cancel: Arc<AtomicBool>) {
         drop(_completion_writer);
         drop(writer.take());
         state.active = None;
-        prune(&mut state);
+        expire_prepared(&mut state);
     }
     drop(writer);
 }

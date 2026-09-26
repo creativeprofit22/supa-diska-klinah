@@ -4,3 +4,5 @@
 *.ps1 text eol=crlf
 *.png binary
 *.ico binary
+# Signed rule packs: the signature covers exact bytes, so never convert line endings.
+src-tauri/crates/windows-platform/src/protection/baseline/** binary

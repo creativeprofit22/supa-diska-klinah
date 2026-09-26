@@ -15,7 +15,7 @@ React route composition lives in `app`. Each feature owns its route object, stat
 
 Tauri uses default-deny access control. Every command must be listed in the app manifest, invoke handler, and a local main-webview capability. Navigation accepts only the packaged origin and one exact development origin. Remote origins and generic shell, filesystem, process, and sidecar permissions are not granted.
 
-The main executable is `asInvoker` and rejects elevated startup. Genuinely administrative work uses one separately manifested `requireAdministrator` helper. Its one-shot authenticated loopback protocol exposes an operation enum, never arbitrary commands or paths. Restore-point creation is the only approved privileged operation.
+The main executable is `asInvoker` and rejects elevated startup. Genuinely administrative work uses one separately manifested `requireAdministrator` helper. Its one-shot authenticated loopback protocol exposes an operation enum, never arbitrary commands or paths. Restore-point creation was the first approved privileged operation; [ADR 0002](0002-system-change-helper.md) adds the reviewed system-change batch.
 
 Automated architecture and security checks enforce dependency graphs, synchronized command allowlists, manifests, and capability policy. The parity matrix records compatibility intent separately from implementation and verification evidence.
 

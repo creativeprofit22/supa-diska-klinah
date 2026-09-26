@@ -1,0 +1,6 @@
+.cleaner-page { max-width: 52rem; min-width: 0; overflow-wrap: anywhere; }
+.cleaner-page fieldset, .cleaner-page details { margin-block: 1rem; min-width: 0; }
+.cleaner-page select { max-width: 100%; }
+.cleaner-scope { display: flex; align-items: start; gap: .5rem; margin-block: .75rem; }
+.cleaner-scope input { flex-shrink: 0; }
+.cleaner-page button { margin: .25rem; }

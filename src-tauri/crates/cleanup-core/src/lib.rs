@@ -5,6 +5,7 @@ mod protection;
 mod rules;
 mod scanner;
 pub mod storage;
+pub mod system_change;
 
 pub use build_artifacts::*;
 pub use engine::*;

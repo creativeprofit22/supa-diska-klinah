@@ -5,6 +5,8 @@ use windows_platform::cleanup::{
     CleanupPreview, CleanupPreviewError, CleanupService, CleanupServiceError, ProjectArtifactScan,
     ProjectRoot,
 };
+use windows_platform::history::{HistoryKind, HistoryPage, HistoryRequest};
+use windows_platform::storage::scan_profile::{ScanProfile, ScanSettings};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +49,10 @@ impl From<CleanupServiceError> for CleanupCommandError {
             CleanupServiceError::ValidationFailed => (
                 "validationFailed",
                 "Cleanup stopped because an item changed.",
+            ),
+            CleanupServiceError::RecoveryVolumeUnsupported => (
+                "recoveryVolumeUnsupported",
+                "App recovery is unavailable for the selected volume.",
             ),
             CleanupServiceError::PersistenceFailed => {
                 ("persistenceFailed", "Cleanup records could not be saved.")
@@ -171,12 +177,17 @@ pub(crate) async fn execute_cleanup_plan(
 }
 
 #[tauri::command]
-pub(crate) async fn execute_permanent_cleanup_plan(
+pub(crate) async fn execute_permanent_cleanup_plan<R: tauri::Runtime>(
+    window: tauri::WebviewWindow<R>,
     service: tauri::State<'_, Arc<CleanupService>>,
     plan_id: String,
 ) -> Result<CleanupExecutionSummary, CleanupCommandError> {
+    let owner = window
+        .hwnd()
+        .map_err(|_| CleanupCommandError::task_unavailable())?
+        .0 as isize;
     let service = Arc::clone(service.inner());
-    run_blocking(move || service.execute_permanent(&plan_id)).await
+    run_blocking(move || service.execute_permanent_confirmed(&plan_id, owner)).await
 }
 
 #[tauri::command]
@@ -191,9 +202,15 @@ pub(crate) async fn undo_cleanup(
 #[tauri::command]
 pub(crate) async fn cleanup_history(
     service: tauri::State<'_, Arc<CleanupService>>,
-) -> Result<Vec<CleanupExecutionSummary>, CleanupCommandError> {
+    request: tauri::ipc::Request<'_>,
+) -> Result<HistoryPage<CleanupExecutionSummary>, CleanupCommandError> {
+    let input: HistoryRequest = super::storage::decode(&request)
+        .map_err(|_| CleanupCommandError::from(CleanupServiceError::InvalidInput))?;
+    input
+        .validate(HistoryKind::Cleanup)
+        .map_err(|_| CleanupCommandError::from(CleanupServiceError::InvalidInput))?;
     let service = Arc::clone(service.inner());
-    run_blocking(move || service.history()).await
+    run_blocking(move || service.history_page(input)).await
 }
 
 #[tauri::command]
@@ -212,6 +229,24 @@ pub(crate) async fn set_auto_cleanup_policy(
 ) -> Result<AutoCleanupPolicy, CleanupCommandError> {
     let service = Arc::clone(service.inner());
     run_blocking(move || service.set_policy(enabled, grace_days)).await
+}
+
+#[tauri::command]
+pub(crate) async fn get_scan_settings(
+    service: tauri::State<'_, Arc<CleanupService>>,
+) -> Result<ScanSettings, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.scan_settings()).await
+}
+
+/// `profile` is a closed enum, so unknown values fail deserialization before this runs.
+#[tauri::command]
+pub(crate) async fn set_scan_settings(
+    service: tauri::State<'_, Arc<CleanupService>>,
+    profile: ScanProfile,
+) -> Result<ScanSettings, CleanupCommandError> {
+    let service = Arc::clone(service.inner());
+    run_blocking(move || service.set_scan_profile(profile)).await
 }
 
 #[cfg(test)]
@@ -287,6 +322,11 @@ mod tests {
                 CleanupServiceError::ValidationFailed,
                 "validationFailed",
                 "Cleanup stopped because an item changed.",
+            ),
+            (
+                CleanupServiceError::RecoveryVolumeUnsupported,
+                "recoveryVolumeUnsupported",
+                "App recovery is unavailable for the selected volume.",
             ),
             (
                 CleanupServiceError::PersistenceFailed,

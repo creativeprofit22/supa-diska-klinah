@@ -40,6 +40,7 @@ const packages = new Map(
 const expectedPackages = [
   "cleanup-core",
   "privileged-helper",
+  "protection-core",
   "supa-diska-klinah",
   "windows-platform",
 ];
@@ -62,8 +63,10 @@ function workspaceDependencies(packageName) {
 const expectedEdges = new Map([
   ["supa-diska-klinah", ["windows-platform"]],
   ["privileged-helper", ["windows-platform"]],
-  ["windows-platform", ["cleanup-core"]],
+  ["windows-platform", ["cleanup-core", "protection-core"]],
   ["cleanup-core", []],
+  // ADR 0003: portable rules, matching and evidence; no platform or app edges.
+  ["protection-core", []],
 ]);
 
 for (const [packageName, expected] of expectedEdges) {
@@ -73,16 +76,24 @@ for (const [packageName, expected] of expectedEdges) {
   }
 }
 
-const coreDependencies = packages.get("cleanup-core").dependencies.map(({ name }) => name);
-const forbiddenCoreDependency = coreDependencies.find(
-  (name) => name === "tauri" || name.startsWith("tauri-") || name === "windows" || name.startsWith("windows-"),
-);
-
-if (forbiddenCoreDependency) {
-  fail(`cleanup-core cannot depend on ${forbiddenCoreDependency}`);
+for (const corePackage of ["cleanup-core", "protection-core"]) {
+  const coreDependencies = packages.get(corePackage).dependencies.map(({ name }) => name);
+  const forbiddenCoreDependency = coreDependencies.find(
+    (name) => name === "tauri" || name.startsWith("tauri-") || name === "windows" || name.startsWith("windows-"),
+  );
+  if (forbiddenCoreDependency) {
+    fail(`${corePackage} cannot depend on ${forbiddenCoreDependency}`);
+  }
 }
 
-for (const packageName of ["cleanup-core", "privileged-helper", "windows-platform"]) {
+// ADR 0003: no HTTP client crates anywhere; the only network sink is WinHTTP in protection/net.rs.
+const httpCrates = /^(?:reqwest|ureq|hyper|hyper-util|isahc|surf|attohttpc|minreq|curl|curl-sys|tauri-plugin-http|tauri-plugin-upload|tungstenite|tokio-tungstenite|yara|yara-x|yara-sys)$/;
+for (const [packageName, pkg] of packages) {
+  const httpDependency = pkg.dependencies.find(({ name }) => httpCrates.test(name));
+  if (httpDependency) fail(`${packageName} cannot depend on ${httpDependency.name}; see ADR 0003`);
+}
+
+for (const packageName of ["cleanup-core", "privileged-helper", "protection-core", "windows-platform"]) {
   const dependency = packages
     .get(packageName)
     .dependencies.find(({ name }) => name === "tauri" || name.startsWith("tauri-"));
@@ -99,11 +110,28 @@ const approvedProcessOwner = resolve(
 );
 const approvedVendorOwner = resolve(root, "src-tauri/crates/windows-platform/src/storage/vendor_uninstall.rs");
 const approvedBrokerOwner = resolve(root, "src-tauri/crates/windows-platform/src/security/broker.rs");
+// The verified self-update installer is opened (never elevated) from this one file.
+const approvedUpdateLaunchOwner = resolve(root, "src-tauri/crates/windows-platform/src/self_update/launch.rs");
+// ADR 0002: the only system-management process launch is the helper-side
+// `<System32>\powercfg.exe /hibernate on|off` with fixed argv.
+const approvedPowercfgOwner = resolve(root, "src-tauri/crates/windows-platform/src/power/elevated.rs");
 // Only the #[cfg(test)] cancellation tests copy/compile this standalone fixture.
 // Keep this exception exact: other tests, fixtures, and production files stay checked.
+// ADR 0003: the single network sink, and the read-only process inventory.
+const approvedNetworkOwner = resolve(root, "src-tauri/crates/windows-platform/src/protection/net.rs");
+const protectionDir = resolve(root, "src-tauri/crates/windows-platform/src/protection");
 const approvedProcessFixture = resolve(
   root,
   "src-tauri/crates/windows-platform/tests/fixtures/native-process-tree.rs",
+);
+const systemModuleDirs = [
+  "startup_items", "services", "drivers", "firewall", "hosts", "privacy", "power", "restore",
+  "updates", "scheduler", "system_change",
+].map((name) => resolve(root, "src-tauri/crates/windows-platform/src", name));
+const systemModuleFiles = new Set(
+  ["optimizer.rs", "win_registry.rs", "os_info.rs", "security/system_changes.rs"].map((name) =>
+    resolve(root, "src-tauri/crates/windows-platform/src", name),
+  ),
 );
 function rustFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -119,13 +147,47 @@ for (const directory of rustRoots) {
       /\bprocess\s*::\s*(?:Command|\*|\{[^}]*\bCommand\b)|\bCommand\s*::\s*new|\buse\s+std\s*::\s*process\s*(?:;|as)/.test(source) &&
       resolve(file) !== approvedVendorOwner &&
       resolve(file) !== approvedProcessOwner &&
+      resolve(file) !== approvedPowercfgOwner &&
       resolve(file) !== approvedProcessFixture
     ) {
       fail(`${relative(root, file)} contains forbidden runtime process execution`);
     }
+    if (resolve(file) === approvedPowercfgOwner) {
+      const launches = source.match(/\bCommand\s*::\s*new\b/g) ?? [];
+      if (
+        launches.length !== 1 ||
+        !/\["\/hibernate",\s*if enabled \{ "on" \} else \{ "off" \}\]/.test(source) ||
+        !/const POWERCFG_EXE: &str = "powercfg\.exe";/.test(source) ||
+        /\.arg\s*\(|\bformat!\s*\(/.test(source)
+      ) {
+        fail(`${relative(root, file)} must launch only powercfg.exe /hibernate on|off with fixed argv`);
+      }
+    }
+    if (systemModuleFiles.has(resolve(file)) || systemModuleDirs.some((dir) => resolve(file).startsWith(dir + sep))) {
+      if (/"(?:[^"\\]|\\.)*\b(?:cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?|schtasks(?:\.exe)?|netsh(?:\.exe)?|sc\.exe|reg\.exe|wmic(?:\.exe)?|pnputil(?:\.exe)?)\b/i.test(source)) {
+        fail(`${relative(root, file)} references a shell or management CLI; use typed Windows APIs`);
+      }
+    }
+    if (/\bWinHttp[A-Za-z]*\b|\bwinhttp\b|\bWinInet\b|\bInternet(?:Open|Connect|ReadFile)[AW]?\b|\bURLDownloadToFile[AW]?\b/.test(source) &&
+        resolve(file) !== approvedNetworkOwner) {
+      fail(`${relative(root, file)} uses a network API; only protection/net.rs may (ADR 0003)`);
+    }
+    // Raw sockets: only the helper broker/helper loopback transport is approved.
+    const loopbackOwners = [approvedBrokerOwner, resolve(root, "src-tauri/crates/windows-platform/src/security/helper.rs")];
+    if (/\bTcpStream\b|\bTcpListener\b|\bUdpSocket\b|\bWSAStartup\b/.test(source) &&
+        !loopbackOwners.includes(resolve(file))) {
+      fail(`${relative(root, file)} opens a socket; only the loopback helper transport may`);
+    }
+    if (loopbackOwners.includes(resolve(file)) && (/\bUNSPECIFIED\b|"0\.0\.0\.0/.test(source) || !/Ipv4Addr::LOCALHOST/.test(source))) {
+      fail(`${relative(root, file)} must use loopback only`);
+    }
+    if (resolve(file).startsWith(protectionDir + sep) &&
+        /\b(?:TerminateProcess|NtTerminateProcess|SuspendThread|NtSuspendProcess|DebugActiveProcess|WriteProcessMemory|CreateRemoteThread|PROCESS_TERMINATE|PROCESS_VM_READ|PROCESS_VM_WRITE|PROCESS_ALL_ACCESS)\b/.test(source)) {
+      fail(`${relative(root, file)} must stay read-only toward other processes (ADR 0003)`);
+    }
     // Detect imported/aliased APIs too, not just call expressions. Fixture paths get no native exception.
     if (/\b(?:CreateProcess(?:AsUser|WithLogon|WithToken)?[AW]?|ShellExecute(?:Ex)?[AW]?|WinExec|NtCreateUserProcess|RtlCreateUserProcess)\b/.test(source) &&
-        ![approvedVendorOwner, approvedBrokerOwner, approvedProcessOwner].includes(resolve(file))) {
+        ![approvedVendorOwner, approvedBrokerOwner, approvedProcessOwner, approvedUpdateLaunchOwner].includes(resolve(file))) {
       fail(`${relative(root, file)} contains forbidden native process execution`);
     }
   }
@@ -188,6 +250,39 @@ for (const file of sourceFiles(sourceRoot)) {
       fail(`${relative(root, file)} crosses its feature boundary`);
     }
   }
+}
+
+// ADR 0003: the webview never talks to the network; connect-src stays IPC-only.
+const tauriConfig = JSON.parse(readFileSync(resolve(root, "src-tauri/tauri.conf.json"), "utf8"));
+const connectSources = (csp) => csp?.match(/connect-src ([^;]*)/)?.[1].trim().split(/\s+/) ?? [];
+if (connectSources(tauriConfig.app.security.csp).join(" ") !== "ipc: http://ipc.localhost") {
+  fail("production CSP connect-src must be exactly 'ipc: http://ipc.localhost'");
+}
+if (connectSources(tauriConfig.app.security.devCsp).some((source) => !/^(?:'self'|ipc:|http:\/\/ipc\.localhost|ws:\/\/127\.0\.0\.1:\d+)$/.test(source))) {
+  fail("development CSP connect-src may only add the local dev server");
+}
+// ADR 0003: the embedded WebView2 engine must not make its own background
+// connections. Setting these args replaces wry's defaults, so they are restated.
+for (const window of tauriConfig.app.windows) {
+  const args = (window.additionalBrowserArgs ?? "").split(/\s+/);
+  for (const required of ["--disable-background-networking", "--disable-component-update", "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"]) {
+    if (!args.includes(required)) fail(`window "${window.label}" must set ${required} in additionalBrowserArgs`);
+  }
+}
+for (const file of sourceFiles(sourceRoot)) {
+  if (/\b(?:fetch\s*\(|XMLHttpRequest|WebSocket\s*\(|EventSource\s*\(|navigator\.sendBeacon)/.test(readFileSync(file, "utf8"))) {
+    fail(`${relative(root, file)} makes a network request from the webview; use a typed command`);
+  }
+}
+
+// ADR 0003: protection UI never claims certification or safety. Only rendered
+// components are checked; types.ts mirrors backend codes, and tests assert absence.
+const protectionUi = resolve(sourceRoot, "features/protection");
+for (const file of (existsSync(protectionUi) ? sourceFiles(protectionUi) : []).filter((path) => /\.tsx$/.test(path) && !/\.test\.tsx$/.test(path))) {
+  const strings = [...readFileSync(file, "utf8").matchAll(/"([^"\n]*)"|`([^`]*)`|>([^<>{}\n]+)</g)]
+    .map((match) => match[1] ?? match[2] ?? match[3]);
+  const claim = strings.find((text) => /\b(?:clean|safe|certified|protected|virus-free|malware-free|secure device)\b/i.test(text));
+  if (claim) fail(`${relative(root, file)} uses certification wording: "${claim.trim().slice(0, 80)}"`);
 }
 
 console.log("Architecture boundaries verified.");

@@ -1,0 +1,83 @@
+import type { Catalog } from "../../shared/i18n/catalog";
+import type { RestorePointKind } from "./types";
+
+const en = {
+  defaultDescription: "Supa Diska Klinah manual restore point",
+  kind: {
+    applicationInstall: "Application install",
+    applicationUninstall: "Application uninstall",
+    deviceDriverInstall: "Device driver install",
+    modifySettings: "Settings change",
+    cancelledOperation: "Cancelled operation",
+    other: "Other",
+  } satisfies Record<RestorePointKind, string>,
+  enterDescription: "Enter a description.",
+  tooLong: (max: number) => `Use at most ${max} characters.`,
+  controlChars: "Remove control characters (such as tabs or line breaks).",
+  describe: (description: string) => `Create restore point: ${description}`,
+  policyDisabled: "System Restore is disabled by policy on this device; Windows will not create restore points.",
+  policyNotDisabled: "System Restore is not disabled by policy.",
+  protectionUnknown: "Windows has not recorded whether system drive protection is on.",
+  protectionState: (on: boolean) => `System drive protection is ${on ? "on" : "off"}.`,
+  frequency: (minutes: number) =>
+    `Creation frequency: ${minutes} minutes. Windows may skip a new restore point if one was created within that window.`,
+  listError: "Restore points could not be listed.",
+  protectionError: "Restore protection status could not be read.",
+  eyebrow: "System",
+  title: "Restore points",
+  intro: "Shows Windows System Restore status and existing points, and can ask Windows to create a new one; it cannot restore or delete points.",
+  refresh: "Refresh",
+  loading: "Loading restore points…",
+  protectionLabel: "Protection status",
+  protectionTitle: "Protection",
+  existingLabel: "Existing restore points",
+  requiresAdministrator: "Listing restore points requires administrator permission. Run the app as administrator to see them.",
+  unavailable: "System Restore is unavailable on this device, so restore points cannot be listed.",
+  noPoints: "No restore points found.",
+  creationUnknown: "Creation time unknown",
+  createLabel: "Create a restore point",
+  description: "Description",
+  addToReview: "Add restore point to review",
+};
+
+const es419 = {
+  defaultDescription: "Punto de restauración manual de Supa Diska Klinah",
+  kind: {
+    applicationInstall: "Instalación de aplicación",
+    applicationUninstall: "Desinstalación de aplicación",
+    deviceDriverInstall: "Instalación de controlador de dispositivo",
+    modifySettings: "Cambio de configuración",
+    cancelledOperation: "Operación cancelada",
+    other: "Otro",
+  },
+  enterDescription: "Escribe una descripción.",
+  tooLong: (max: number) => `Usa como máximo ${max} caracteres.`,
+  controlChars: "Quita los caracteres de control (como tabulaciones o saltos de línea).",
+  describe: (description: string) => `Crear punto de restauración: ${description}`,
+  policyDisabled: "Una directiva deshabilita Restaurar sistema en este dispositivo; Windows no creará puntos de restauración.",
+  policyNotDisabled: "Ninguna directiva deshabilita Restaurar sistema.",
+  protectionUnknown: "Windows no registró si la protección de la unidad del sistema está activada.",
+  protectionState: (on: boolean) => `La protección de la unidad del sistema está ${on ? "activada" : "desactivada"}.`,
+  frequency: (minutes: number) =>
+    `Frecuencia de creación: ${minutes} minutos. Windows puede omitir un nuevo punto de restauración si se creó otro dentro de ese intervalo.`,
+  listError: "No se pudieron listar los puntos de restauración.",
+  protectionError: "No se pudo leer el estado de la protección de restauración.",
+  eyebrow: "Sistema",
+  title: "Puntos de restauración",
+  intro: "Muestra el estado de Restaurar sistema de Windows y los puntos existentes, y puede pedirle a Windows que cree uno nuevo; no puede restaurar ni eliminar puntos.",
+  refresh: "Actualizar",
+  loading: "Cargando puntos de restauración…",
+  protectionLabel: "Estado de la protección",
+  protectionTitle: "Protección",
+  existingLabel: "Puntos de restauración existentes",
+  requiresAdministrator: "Para listar los puntos de restauración se necesita permiso de administrador. Ejecuta la app como administrador para verlos.",
+  unavailable: "Restaurar sistema no está disponible en este dispositivo, así que no se pueden listar los puntos de restauración.",
+  noPoints: "No se encontraron puntos de restauración.",
+  creationUnknown: "Hora de creación desconocida",
+  createLabel: "Crear un punto de restauración",
+  description: "Descripción",
+  addToReview: "Agregar el punto de restauración a la revisión",
+} satisfies Catalog<typeof en>;
+
+export const restoreStrings = { en, es419 };
+export type RestoreStrings = typeof en;

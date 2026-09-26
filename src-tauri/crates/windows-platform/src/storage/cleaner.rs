@@ -7,7 +7,7 @@ use super::{
 };
 use cleanup_core::storage::*;
 use cleanup_core::{EntryKind, FileSystem, Lifecycle, ProtectionPolicy, Risk};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -88,7 +88,8 @@ fn catalogs() -> Vec<Catalog> {
 }
 /// Every expanded target has its own exact path, provenance and disposition. This
 /// is a backend inventory, not a claim that a cache exists on the current machine.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CatalogTargetPolicy {
     pub catalog_id: String,
     pub target_id: String,
@@ -104,7 +105,8 @@ pub struct CatalogTargetPolicy {
     pub unsupported_reason: Option<String>,
     pub matcher: String,
 }
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CleanerCatalog {
     pub targets: Vec<CatalogTargetPolicy>,
     pub unsupported_operations: Vec<[String; 2]>,
@@ -181,6 +183,53 @@ pub fn catalog_inventory() -> CleanerCatalog {
             .collect(),
         unsupported_operations: policy().unsupported_operations,
     }
+}
+/// Native catalog roots only; target matching still happens inside the cleaner.
+pub(crate) fn native_scope_paths() -> Result<Vec<(String, Option<PathBuf>)>, StorageError> {
+    Ok(scope_paths_with(&NativeKnownFolders))
+}
+
+/// Bounded by the fixed, compiled catalog, not by renderer input.
+pub(crate) fn scope_inventory_bound() -> usize {
+    compiled_targets().len()
+}
+fn scope_paths_with(resolver: &dyn KnownFolderResolver) -> Vec<(String, Option<PathBuf>)> {
+    let mut scopes: Vec<(String, Option<PathBuf>)> = Vec::new();
+    let semantics = crate::WindowsFileSystem.semantics();
+    for target in compiled_targets() {
+        let label = format!(
+            "{} · {} · {}",
+            target.metadata.catalog_id, target.metadata.target_id, target.metadata.path
+        );
+        // simplification: fixed catalog (at most 1024 targets), linear deduplication;
+        // switch to a keyed map if compiled scope inventory grows beyond that bound.
+        match bind(target, resolver) {
+            Ok(bound) => {
+                if let Some(existing) = scopes.iter_mut().find(|(_, path)| {
+                    path.as_ref()
+                        .is_some_and(|path| semantics.key(path) == semantics.key(&bound.root))
+                }) {
+                    // Full per-rule provenance remains in catalog_inventory.
+                    // Do not turn a radio label into an unbounded concatenation.
+                    existing.0 = format!("Multiple catalog rules: {}", bound.root.display());
+                } else {
+                    scopes.push((label, Some(bound.root)));
+                }
+            }
+            Err(_) => scopes.push((
+                format!(
+                    "{label}: {}",
+                    target
+                        .metadata
+                        .unsupported_reason
+                        .as_deref()
+                        .unwrap_or("Native known folder unavailable")
+                ),
+                None,
+            )),
+        }
+    }
+    scopes
 }
 fn folder(name: &str) -> Result<KnownFolder, StorageError> {
     match name {

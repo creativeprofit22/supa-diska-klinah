@@ -6,18 +6,29 @@ use std::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use zeroize::Zeroizing;
 
-use super::{CreateSystemRestorePointResult, RestorePointDescription};
+use super::{
+    CreateSystemRestorePointResult, RestorePointDescription,
+    system_changes::{HelperChangeItem, HelperChangeResult},
+};
 
-pub const PROTOCOL_VERSION: u8 = 1;
+/// Version 2 adds the reviewed `applySystemChanges` batch (ADR 0002).
+pub const PROTOCOL_VERSION: u8 = 2;
 pub const TOKEN_BYTES: usize = 32;
 pub const REQUEST_ID_BYTES: usize = 16;
-pub const MAX_FRAME_BYTES: usize = 4 * 1024;
+pub const MAX_FRAME_BYTES: usize = 16 * 1024;
 pub const AUTHORIZATION_LIFETIME_SECONDS: u64 = 60;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "operation", rename_all = "camelCase", deny_unknown_fields)]
 pub enum PrivilegedOperation {
-    CreateSystemRestorePoint { description: String },
+    CreateSystemRestorePoint {
+        description: String,
+    },
+    /// One confirmed plan's helper-privileged changes (1..=32), applied in
+    /// order with a prior-state re-read per item.
+    ApplySystemChanges {
+        changes: Vec<HelperChangeItem>,
+    },
 }
 
 impl PrivilegedOperation {
@@ -72,6 +83,9 @@ impl RequestEnvelope {
 pub enum PrivilegedResponse {
     Success {
         result: CreateSystemRestorePointResult,
+    },
+    SystemChangesApplied {
+        results: Vec<HelperChangeResult>,
     },
     Error {
         code: HelperErrorCode,
@@ -147,7 +161,7 @@ pub fn tokens_match(expected: &[u8; TOKEN_BYTES], supplied: &[u8; TOKEN_BYTES]) 
 pub fn write_json_frame(mut writer: impl Write, value: &impl Serialize) -> io::Result<()> {
     let frame = serde_json::to_vec(value).map_err(invalid_json)?;
     if frame.len() > MAX_FRAME_BYTES {
-        return Err(invalid_data("privileged frame exceeds 4 KiB"));
+        return Err(invalid_data("privileged frame exceeds 16 KiB"));
     }
     let mut message = Vec::with_capacity(4 + frame.len());
     message.extend_from_slice(&(frame.len() as u32).to_be_bytes());
@@ -262,7 +276,12 @@ mod tests {
 
     #[test]
     fn framing_rejects_oversized_truncated_and_malformed_json() {
-        assert!(read_json_frame::<RequestEnvelope>(Cursor::new((4097_u32).to_be_bytes())).is_err());
+        assert!(
+            read_json_frame::<RequestEnvelope>(Cursor::new(
+                ((MAX_FRAME_BYTES + 1) as u32).to_be_bytes()
+            ))
+            .is_err()
+        );
         assert!(read_json_frame::<RequestEnvelope>(Cursor::new([0, 0, 0, 5, b'{'])).is_err());
         assert!(read_json_frame::<RequestEnvelope>(Cursor::new([0, 0, 0, 1, b'{'])).is_err());
     }
@@ -270,13 +289,51 @@ mod tests {
     #[test]
     fn parser_rejects_unknown_operations_and_fields() {
         for json in [
-            br#"{"protocolVersion":1,"requestId":"11111111111111111111111111111111","issuedAt":100,"expiresAt":160,"operation":{"operation":"deletePath","path":"C:\\"}}"#.as_slice(),
-            br#"{"protocolVersion":1,"requestId":"11111111111111111111111111111111","issuedAt":100,"expiresAt":160,"extra":true,"operation":{"operation":"createSystemRestorePoint","description":"ok"}}"#.as_slice(),
+            br#"{"protocolVersion":2,"requestId":"11111111111111111111111111111111","issuedAt":100,"expiresAt":160,"operation":{"operation":"deletePath","path":"C:\\"}}"#.as_slice(),
+            br#"{"protocolVersion":2,"requestId":"11111111111111111111111111111111","issuedAt":100,"expiresAt":160,"extra":true,"operation":{"operation":"createSystemRestorePoint","description":"ok"}}"#.as_slice(),
+            br#"{"protocolVersion":2,"requestId":"11111111111111111111111111111111","issuedAt":100,"expiresAt":160,"operation":{"operation":"applySystemChanges","changes":[{"change":{"kind":"runCommand","command":"whoami"},"expectedPrior":{"kind":"notApplicable"}}]}}"#.as_slice(),
+            br#"{"protocolVersion":2,"requestId":"11111111111111111111111111111111","issuedAt":100,"expiresAt":160,"operation":{"operation":"applySystemChanges","changes":[{"change":{"kind":"setHibernation","enabled":false},"expectedPrior":{"kind":"notApplicable"},"registryKey":"HKLM\\SAM"}]}}"#.as_slice(),
         ] {
             let mut frame = (json.len() as u32).to_be_bytes().to_vec();
             frame.extend_from_slice(json);
             assert!(read_json_frame::<RequestEnvelope>(Cursor::new(frame)).is_err());
         }
+    }
+
+    #[test]
+    fn full_batch_of_typical_changes_fits_in_one_frame() {
+        use crate::security::system_changes::{HelperChange, batch_fits_frame};
+        use cleanup_core::system_change::{
+            EntryName, MAX_PLAN_CHANGES, PriorState, StartupLocation,
+        };
+        let name = EntryName::parse("Contoso Background Updater Service Helper").unwrap();
+        let changes = vec![
+            HelperChangeItem {
+                change: HelperChange::SetMachineStartupEntry {
+                    location: StartupLocation::StartupFolder,
+                    name,
+                    enabled: false,
+                },
+                expected_prior: PriorState::Enabled { enabled: true },
+            };
+            MAX_PLAN_CHANGES
+        ];
+        let mut value = request();
+        assert!(batch_fits_frame(&changes));
+        value.operation = PrivilegedOperation::ApplySystemChanges { changes };
+        let mut bytes = Vec::new();
+        write_json_frame(&mut bytes, &value).unwrap();
+        assert_eq!(
+            read_json_frame::<RequestEnvelope>(Cursor::new(bytes)).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn version_one_frames_are_rejected() {
+        let mut value = request();
+        value.protocol_version = 1;
+        assert!(value.validate(120).is_err());
     }
 
     #[test]

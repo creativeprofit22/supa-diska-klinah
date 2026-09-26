@@ -8,22 +8,25 @@ import {
   type ProjectArtifactDiscovery,
   type ProjectRoot,
 } from "../api/previewCleanup";
+import { useStrings } from "../../../shared/i18n/I18nProvider";
+import { cleanupStrings, type ProjectRootErrorKey } from "../strings";
 
-const ERROR_MESSAGES: Record<string, string> = {
-  duplicateRoot: "That project root is already saved.",
-  invalidInput: "Enter an existing, unprotected absolute project path.",
-  notFound: "That saved project root is no longer available.",
-  rootLimitReached: "Remove a project root before adding another.",
-  rootPaused: "Resume this project root before scanning it.",
-  persistenceFailed: "Saved project roots could not be updated.",
-};
+const ERROR_KEYS: readonly ProjectRootErrorKey[] = [
+  "duplicateRoot",
+  "invalidInput",
+  "notFound",
+  "rootLimitReached",
+  "rootPaused",
+  "persistenceFailed",
+];
 
-function errorMessage(error: unknown): string {
+function errorKey(error: unknown): ProjectRootErrorKey {
   if (typeof error === "object" && error !== null && "code" in error) {
     const code = String(error.code);
-    if (ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
+    const known = ERROR_KEYS.find((key) => key === code);
+    if (known) return known;
   }
-  return "Project roots could not be updated. Try again.";
+  return "fallback";
 }
 
 interface ProjectArtifactDiscoveryState {
@@ -48,7 +51,8 @@ export function useProjectArtifactDiscovery(): ProjectArtifactDiscoveryState {
   const [loadingRoots, setLoadingRoots] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ProjectRootErrorKey | null>(null);
+  const t = useStrings(cleanupStrings);
   const request = useRef(0);
 
   const load = useCallback(async () => {
@@ -59,7 +63,7 @@ export function useProjectArtifactDiscovery(): ProjectArtifactDiscoveryState {
       const saved = await listProjectRoots();
       if (request.current === current) setRoots(saved);
     } catch (failure) {
-      if (request.current === current) setError(errorMessage(failure));
+      if (request.current === current) setError(errorKey(failure));
     } finally {
       if (request.current === current) setLoadingRoots(false);
     }
@@ -85,7 +89,7 @@ export function useProjectArtifactDiscovery(): ProjectArtifactDiscoveryState {
         setRoots(saved);
         return true;
       } catch (failure) {
-        if (request.current === current) setError(errorMessage(failure));
+        if (request.current === current) setError(errorKey(failure));
         return false;
       } finally {
         if (request.current === current) setPending(null);
@@ -121,7 +125,7 @@ export function useProjectArtifactDiscovery(): ProjectArtifactDiscoveryState {
         setResult(discovered);
       }
     } catch (failure) {
-      if (request.current === current) setError(errorMessage(failure));
+      if (request.current === current) setError(errorKey(failure));
     } finally {
       if (request.current === current) setScanning(false);
     }
@@ -134,7 +138,7 @@ export function useProjectArtifactDiscovery(): ProjectArtifactDiscoveryState {
     loadingRoots,
     scanning,
     pending,
-    error,
+    error: error === null ? null : t.projects.errors[error],
     add,
     setPaused,
     remove,

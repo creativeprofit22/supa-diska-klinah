@@ -1,3 +1,7 @@
+use crate::history::{HistoryCursor, HistoryKind, HistoryPage, HistoryRequest};
+use crate::storage::scan_profile::{
+    SCAN_SETTINGS_SCHEMA_VERSION, ScanProfile, ScanSettings, resolve_workers, seek_penalty,
+};
 use cleanup_core::{
     ArtifactRole, CandidateProofScope, FileSystem, PreviewRecord, ProtectionPolicy, ScanDiagnostic,
     ScanLimits, ScanSnapshot, revalidate_candidate,
@@ -30,7 +34,6 @@ use super::{
     },
 };
 
-const MAX_HISTORY: usize = 100;
 const MAX_MUTATION_ENTRIES: usize = 250_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,6 +45,7 @@ pub enum CleanupServiceError {
     RootPaused,
     RootLimitReached,
     ValidationFailed,
+    RecoveryVolumeUnsupported,
     PersistenceFailed,
     OperationFailed,
 }
@@ -71,6 +75,8 @@ pub struct CleanupExecutionSummary {
 #[serde(rename_all = "camelCase")]
 pub struct CleanupItemOutcome {
     pub item_id: String,
+    /// Display-only, bounded text from the retained immutable plan, never path authority.
+    pub display_path: Option<String>,
     pub state: ItemState,
     pub logical_bytes: u64,
     pub failure: Option<String>,
@@ -337,11 +343,17 @@ impl CleanupService {
         let protection = current_protection().map_err(|_| CleanupServiceError::ValidationFailed)?;
         let scanned_at = now_seconds()?;
         let divisor = selected.len().max(1);
-        let limits = divided_project_limits(divisor);
+        let base_limits = divided_project_limits(divisor);
+        let profile = self.scan_profile();
         let mut records = Vec::new();
         let mut diagnostics = Vec::new();
         let mut scanned_ids = HashSet::new();
         for root in selected {
+            let root_seek_penalty = match profile {
+                ScanProfile::Auto => seek_penalty(Path::new(&root.display_path)),
+                ScanProfile::Ssd | ScanProfile::Hdd => None,
+            };
+            let limits = project_root_limits(base_limits, profile, root_seek_penalty);
             let discovery = discover_project_artifacts_with_limits(
                 Arc::new(WindowsFileSystem),
                 PathBuf::from(&root.display_path),
@@ -413,9 +425,25 @@ impl CleanupService {
             .writer
             .lock()
             .map_err(|_| CleanupServiceError::Conflict)?;
-        let evidence = service
-            .resolve_selection(selection)
-            .map_err(|_| CleanupServiceError::NotFound)?;
+        let evidence = service.resolve_selection(selection).map_err(|error| {
+            use crate::storage::scans::JobError;
+            use cleanup_core::storage::StorageError;
+            // Keep refusal reasons distinct: a live snapshot that rejects the selected
+            // evidence (for example every copy of a duplicate group) is not "unavailable".
+            match error {
+                JobError::Storage(StorageError::SnapshotUnavailable) => {
+                    CleanupServiceError::NotFound
+                }
+                JobError::Storage(StorageError::InvalidRequest) => {
+                    CleanupServiceError::InvalidInput
+                }
+                JobError::Busy => CleanupServiceError::Conflict,
+                JobError::Storage(_) => CleanupServiceError::ValidationFailed,
+                JobError::Native(_) | JobError::WorkerFailed => {
+                    CleanupServiceError::OperationFailed
+                }
+            }
+        })?;
         let root = evidence
             .first()
             .ok_or(CleanupServiceError::InvalidInput)?
@@ -463,6 +491,7 @@ impl CleanupService {
         )
         .map_err(map_storage_error)?;
         self.validate_current_scope(&plan)?;
+        self.validate_storage_recovery_support(&plan)?;
         self.storage.create_plan(&plan).map_err(map_storage_error)?;
         Ok(CleanupPlanSummary {
             plan_id,
@@ -574,6 +603,125 @@ impl CleanupService {
         self.execute_inner(plan_id, true)
     }
 
+    /// `owner` must be the HWND obtained by the native app, never a frontend argument.
+    pub fn execute_permanent_confirmed(
+        &self,
+        plan_id: &str,
+        owner: isize,
+    ) -> Result<CleanupExecutionSummary, CleanupServiceError> {
+        let strings = crate::i18n::native();
+        self.confirm_permanent_with(plan_id, owner, strings, |owner, text| {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, MessageBoxW,
+            };
+            let text: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+            let title: Vec<u16> = strings
+                .confirm_permanent_cleanup_title
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
+            // SAFETY: app-owned HWND and live, NUL-terminated bounded UTF-16 buffers.
+            let result = unsafe {
+                MessageBoxW(
+                    owner as _,
+                    text.as_ptr(),
+                    title.as_ptr(),
+                    MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING,
+                )
+            };
+            if result == 0 {
+                Err(CleanupServiceError::OperationFailed)
+            } else {
+                Ok(result == IDYES)
+            }
+        })
+    }
+
+    fn confirm_permanent_with(
+        &self,
+        plan_id: &str,
+        owner: isize,
+        strings: &crate::i18n::NativeStrings,
+        confirm: impl FnOnce(isize, &str) -> Result<bool, CleanupServiceError>,
+    ) -> Result<CleanupExecutionSummary, CleanupServiceError> {
+        if owner == 0 {
+            return Err(CleanupServiceError::InvalidInput);
+        }
+        let text = {
+            let _writer = self
+                .writer
+                .lock()
+                .map_err(|_| CleanupServiceError::Conflict)?;
+            let plan = self.storage.read_plan(plan_id).map_err(map_storage_error)?;
+            if plan.disposition != CleanupDisposition::Permanent {
+                return Err(CleanupServiceError::InvalidInput);
+            }
+            if self
+                .storage
+                .has_execution_for_plan(&plan.plan_id)
+                .map_err(map_storage_error)?
+            {
+                return Err(CleanupServiceError::Conflict);
+            }
+            self.validate_current_scope(&plan)?;
+            let bytes = checked_sum(plan.items.iter().map(|p| p.proof.logical_bytes))?;
+            let mut text =
+                (strings.permanent_cleanup_intro)(plan.items.len(), bytes, &plan.plan_id);
+            // Bounded escaped preview; count/bytes cover the full immutable native selection.
+            for item in plan.items.iter().take(8) {
+                let path: String = item
+                    .proof
+                    .path
+                    .to_string_lossy()
+                    .chars()
+                    .take(180)
+                    .flat_map(char::escape_default)
+                    .collect();
+                text.push_str(&format!("\n{}: {}", item.item_id, path));
+            }
+            if plan.items.len() > 8 {
+                text.push_str(strings.permanent_cleanup_omitted);
+            }
+            text
+        };
+        if !confirm(owner, &text)? {
+            return Err(CleanupServiceError::OperationFailed);
+        }
+        self.execute_permanent(plan_id)
+    }
+
+    /// Native identities only; review is advisory, so execution must check again.
+    fn validate_storage_recovery_support(
+        &self,
+        plan: &CleanupPlan,
+    ) -> Result<(), CleanupServiceError> {
+        if plan.disposition == CleanupDisposition::Quarantine
+            && matches!(plan.scope, CleanupPlanScope::Storage { .. })
+        {
+            for item in &plan.items {
+                use cleanup_core::FsErrorKind;
+                match self
+                    .file_system
+                    .same_volume(&item.proof.path, self.storage.native_root())
+                {
+                    Ok(true) => {}
+                    Ok(false) => return Err(CleanupServiceError::RecoveryVolumeUnsupported),
+                    // An unreachable item is recorded per item by the execution guard; a
+                    // cross-volume handle rename would still fail closed for that item.
+                    Err(error)
+                        if matches!(
+                            error.kind,
+                            FsErrorKind::NotFound
+                                | FsErrorKind::InUse
+                                | FsErrorKind::PermissionDenied
+                        ) => {}
+                    Err(_) => return Err(CleanupServiceError::ValidationFailed),
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn execute_inner(
         &self,
         plan_id: &str,
@@ -589,14 +737,13 @@ impl CleanupService {
         }
         if self
             .storage
-            .executions()
+            .has_execution_for_plan(&plan.plan_id)
             .map_err(map_storage_error)?
-            .iter()
-            .any(|j| j.plan_id == plan.plan_id)
         {
             return Err(CleanupServiceError::Conflict);
         }
-        self.validate_current_scope(&plan)?;
+        self.validate_scope(&plan, true)?;
+        self.validate_storage_recovery_support(&plan)?;
         // Pin every duplicate group before its first mutation; never reopen members
         // while DELETE handles are held. Keepers/ancestors survive journal completion.
         let mut duplicate_members = std::collections::HashMap::new();
@@ -634,8 +781,9 @@ impl CleanupService {
         let execution_id = random_id()?;
         let started_at = now_seconds()?;
         let policy = self.storage.policy().map_err(map_storage_error)?;
-        let purge_after = (plan.disposition == CleanupDisposition::Quarantine)
-            .then(|| started_at.saturating_add(u64::from(policy.grace_days) * 86_400));
+        let purge_after = (plan.disposition == CleanupDisposition::Quarantine
+            && !matches!(plan.scope, CleanupPlanScope::Storage { .. }))
+        .then(|| started_at.saturating_add(u64::from(policy.grace_days) * 86_400));
         let selected_bytes = checked_sum(plan.items.iter().map(|item| item.proof.logical_bytes))?;
         let mut journal = ExecutionJournal {
             schema_version: 1,
@@ -671,7 +819,19 @@ impl CleanupService {
 
         for index in 0..journal.items.len() {
             journal.items[index].state = ItemState::Mutating;
-            if plan.disposition == CleanupDisposition::Quarantine {
+            if plan.disposition == CleanupDisposition::Quarantine
+                && matches!(plan.scope, CleanupPlanScope::Storage { .. })
+            {
+                journal.items[index].quarantine_path = Some(
+                    self.storage
+                        .expected_quarantine_path(
+                            &journal.execution_id,
+                            &journal.items[index].item_id,
+                        )
+                        .map_err(map_storage_error)?,
+                );
+                journal.items[index].occupied_bytes = plan.items[index].proof.allocated_bytes;
+            } else if plan.disposition == CleanupDisposition::Quarantine {
                 journal.items[index].quarantine_path = Some(
                     self.storage
                         .quarantine_directory(&journal.execution_id, &journal.items[index].item_id)
@@ -691,29 +851,48 @@ impl CleanupService {
                 }
             };
             if let CandidateProofScope::Storage { evidence } = &planned.proof.scope {
+                // Keep Kudu's per-item reasons for files that vanished, are locked, or are
+                // access-denied; everything else stays a generic revalidation refusal.
                 let guard = if matches!(
                     evidence.as_ref(),
                     cleanup_core::storage::StorageEvidence::DuplicateMember { .. }
                 ) {
                     duplicate_members
                         .remove(&index)
-                        .ok_or(CleanupServiceError::ValidationFailed)
+                        .ok_or("storage-revalidation-rejected")
                 } else {
-                    self.validate_storage_entry(evidence, &protection)
+                    self.storage_entry_guard(evidence, &protection)
                 };
-                let result = guard
-                    .map_err(|_| "storage-revalidation-rejected")
-                    .and_then(|guard| match plan.disposition {
-                        CleanupDisposition::Permanent => {
-                            guard.remove().map_err(|_| "permanent-remove-failed")
-                        }
-                        _ => super::recycle::reject_identity_required(&guard)
-                            .map_err(|_| "identity-required-recycle-unsupported"),
-                    });
+                let result = guard.and_then(|guard| match plan.disposition {
+                    CleanupDisposition::Permanent => {
+                        guard.remove().map_err(|_| "permanent-remove-failed")
+                    }
+                    CleanupDisposition::Quarantine => {
+                        // Simplification ceiling: files only, same-volume handle rename;
+                        // never copy/delete fallback, shell recycle, or recursive removal.
+                        guard
+                            .rename_to_recovery(
+                                journal.items[index]
+                                    .quarantine_path
+                                    .as_ref()
+                                    .ok_or("quarantine-unavailable")?,
+                            )
+                            .map_err(|_| "quarantine-move-failed")
+                    }
+                    CleanupDisposition::RecycleBin => {
+                        super::recycle::reject_identity_required(&guard)
+                            .map_err(|_| "identity-required-recycle-unsupported")
+                    }
+                });
                 match result {
                     Ok(()) => {
                         journal.items[index].processed = true;
-                        journal.items[index].state = ItemState::Purged;
+                        journal.items[index].state =
+                            if plan.disposition == CleanupDisposition::Quarantine {
+                                ItemState::Quarantined
+                            } else {
+                                ItemState::Purged
+                            };
                     }
                     Err(reason) => fail_item(&mut journal.items[index], reason),
                 }
@@ -746,7 +925,7 @@ impl CleanupService {
         // Explicit lifetime: keeper and ancestor guards survive every selected
         // member removal and the durable group/plan completion write.
         drop(duplicate_keepers);
-        Ok(summary(&journal))
+        Ok(summary(&journal, &self.storage))
     }
 
     fn mutate_item(
@@ -841,6 +1020,9 @@ impl CleanupService {
             .storage
             .read_plan(&journal.plan_id)
             .map_err(map_storage_error)?;
+        if matches!(plan.scope, CleanupPlanScope::Storage { .. }) {
+            return self.undo_storage(&plan, &mut journal);
+        }
         for index in 0..journal.items.len() {
             {
                 let item = &mut journal.items[index];
@@ -896,22 +1078,95 @@ impl CleanupService {
             }
             persist_accounting(&self.storage, &mut journal)?;
         }
-        Ok(summary(&journal))
+        Ok(summary(&journal, &self.storage))
     }
 
-    pub fn history(&self) -> Result<Vec<CleanupExecutionSummary>, CleanupServiceError> {
-        Ok(self
+    pub fn history_page(
+        &self,
+        request: HistoryRequest,
+    ) -> Result<HistoryPage<CleanupExecutionSummary>, CleanupServiceError> {
+        let (cursor, limit) = request
+            .validate(HistoryKind::Cleanup)
+            .map_err(|_| CleanupServiceError::InvalidInput)?;
+        let _writer = self
+            .writer
+            .lock()
+            .map_err(|_| CleanupServiceError::Conflict)?;
+        let journals = self
             .storage
-            .executions()
-            .map_err(map_storage_error)?
-            .into_iter()
-            .take(MAX_HISTORY)
-            .map(|journal| summary(&journal))
-            .collect())
+            .execution_page(
+                cursor
+                    .as_ref()
+                    .map(|cursor| (cursor.timestamp, cursor.id.as_str())),
+                limit,
+            )
+            .map_err(map_storage_error)?;
+        // An exact full page may lead to an empty terminal page; do not enumerate twice.
+        let next_cursor = if journals.len() == limit {
+            journals
+                .last()
+                .map(|journal| {
+                    HistoryCursor::encode(
+                        HistoryKind::Cleanup,
+                        journal.started_at,
+                        &journal.execution_id,
+                    )
+                })
+                .transpose()
+                .map_err(|_| CleanupServiceError::PersistenceFailed)?
+        } else {
+            None
+        };
+        Ok(HistoryPage {
+            records: journals
+                .iter()
+                .map(|journal| summary(journal, &self.storage))
+                .collect(),
+            next_cursor,
+        })
     }
 
     pub fn policy(&self) -> Result<AutoCleanupPolicy, CleanupServiceError> {
         self.storage.policy().map_err(map_storage_error)
+    }
+
+    /// Effective scan settings, matching what `scan_profile` hands to scans. Stored
+    /// content that is corrupt, oversized, or from another schema reads as the default
+    /// (`auto`) so the UI can show it and a save can replace the bad file. I/O failures
+    /// still surface so a transient error stays retryable rather than masked.
+    pub fn scan_settings(&self) -> Result<ScanSettings, CleanupServiceError> {
+        match self.storage.scan_settings() {
+            Ok(settings) => Ok(settings),
+            Err(StorageError::Invalid | StorageError::TooLarge) => Ok(ScanSettings::default()),
+            Err(error) => Err(map_storage_error(error)),
+        }
+    }
+
+    /// Profile used to resolve scan workers. An unreadable settings file falls back to
+    /// `auto`, whose unknown-media path is the conservative HDD count.
+    pub fn scan_profile(&self) -> ScanProfile {
+        self.storage
+            .scan_settings()
+            .map(|settings| settings.profile)
+            .unwrap_or_default()
+    }
+
+    pub fn set_scan_profile(
+        &self,
+        profile: ScanProfile,
+    ) -> Result<ScanSettings, CleanupServiceError> {
+        let settings = ScanSettings {
+            schema_version: SCAN_SETTINGS_SCHEMA_VERSION,
+            profile,
+        };
+        let _writer = self
+            .writer
+            .lock()
+            .map_err(|_| CleanupServiceError::Conflict)?;
+        self.storage
+            .write_scan_settings(&settings)
+            .map_err(map_storage_error)?;
+        Ok(settings)
     }
 
     pub fn set_policy(
@@ -970,12 +1225,21 @@ impl CleanupService {
             return Ok(());
         }
         let now = now_seconds()?;
-        for mut journal in self.storage.executions().map_err(map_storage_error)? {
+        for record in self.storage.execution_records() {
+            let mut journal = record.map_err(map_storage_error)?;
             if journal.disposition != CleanupDisposition::Quarantine
                 || journal
                     .purge_after
                     .is_none_or(|purge_after| purge_after > now)
             {
+                continue;
+            }
+            // Manual Storage recovery is never fed to the legacy path-based purge engine.
+            let plan = self
+                .storage
+                .read_plan(&journal.plan_id)
+                .map_err(map_storage_error)?;
+            if matches!(plan.scope, CleanupPlanScope::Storage { .. }) {
                 continue;
             }
             for item in &mut journal.items {
@@ -1013,6 +1277,17 @@ impl CleanupService {
 
     /// Shared creation/execution/recovery gate. Unimplemented evidence resolvers deny authority.
     fn validate_current_scope(&self, plan: &CleanupPlan) -> Result<(), CleanupServiceError> {
+        self.validate_scope(plan, false)
+    }
+
+    /// `tolerate_item_access`: at execution only, a non-duplicate item that is missing, in use
+    /// or access-denied does not refuse the whole plan. The per-item guard reopens it and
+    /// records that reason, like Kudu; every other check stays plan-wide and fails closed.
+    fn validate_scope(
+        &self,
+        plan: &CleanupPlan,
+        tolerate_item_access: bool,
+    ) -> Result<(), CleanupServiceError> {
         plan.validate().map_err(map_storage_error)?;
         if matches!(plan.scope, CleanupPlanScope::Storage { .. }) {
             let protection =
@@ -1036,7 +1311,16 @@ impl CleanupService {
                 let CandidateProofScope::Storage { evidence } = &item.proof.scope else {
                     return Err(CleanupServiceError::ValidationFailed);
                 };
-                self.validate_storage_entry(evidence, &protection)?;
+                match self.storage_entry_guard(evidence, &protection) {
+                    Ok(_) => {}
+                    Err("not-found" | "in-use" | "permission-denied")
+                        if tolerate_item_access
+                            && !matches!(
+                                evidence.as_ref(),
+                                cleanup_core::storage::StorageEvidence::DuplicateMember { .. }
+                            ) => {}
+                    Err(_) => return Err(CleanupServiceError::ValidationFailed),
+                }
             }
             return Ok(());
         }
@@ -1049,15 +1333,17 @@ impl CleanupService {
         }
     }
 
-    fn validate_storage_entry(
+    /// Revalidate one storage entry and bind its identity guard. The error is the per-item
+    /// failure reason: `not-found`, `in-use` or `permission-denied` when the entry itself
+    /// cannot be opened, otherwise `storage-revalidation-rejected`.
+    fn storage_entry_guard(
         &self,
         evidence: &cleanup_core::storage::StorageEvidence,
         protection: &ProtectionPolicy,
-    ) -> Result<super::filesystem::IdentityGuard, CleanupServiceError> {
+    ) -> Result<super::filesystem::IdentityGuard, &'static str> {
         use cleanup_core::storage::StorageEvidence;
-        evidence
-            .validate()
-            .map_err(|_| CleanupServiceError::ValidationFailed)?;
+        const REJECTED: &str = "storage-revalidation-rejected";
+        evidence.validate().map_err(|_| REJECTED)?;
         let scope_valid = match evidence {
             StorageEvidence::UserSelectedFile { root, entry } => {
                 crate::storage::protection::personal_path_allowed(&root.canonical_path)
@@ -1098,15 +1384,118 @@ impl CleanupService {
             || protection.is_protected(&evidence.entry().canonical_path)
             || protection.is_repository_metadata(&evidence.entry().canonical_path)
         {
-            return Err(CleanupServiceError::ValidationFailed);
+            return Err(REJECTED);
         }
         self.file_system
             .guard_entry(evidence.root(), evidence.entry(), false)
+            .map_err(|error| match error.kind {
+                cleanup_core::FsErrorKind::NotFound => "not-found",
+                cleanup_core::FsErrorKind::InUse => "in-use",
+                cleanup_core::FsErrorKind::PermissionDenied => "permission-denied",
+                _ => REJECTED,
+            })
+    }
+
+    fn storage_recovery_guard(
+        &self,
+        plan: &CleanupPlan,
+        journal: &ExecutionJournal,
+        index: usize,
+    ) -> Result<super::filesystem::IdentityGuard, CleanupServiceError> {
+        let item = &journal.items[index];
+        let planned = plan
+            .items
+            .iter()
+            .find(|p| p.item_id == item.item_id)
+            .ok_or(CleanupServiceError::ValidationFailed)?;
+        let CandidateProofScope::Storage { evidence } = &planned.proof.scope else {
+            return Err(CleanupServiceError::ValidationFailed);
+        };
+        let expected = self
+            .storage
+            .expected_quarantine_path(&journal.execution_id, &item.item_id)
+            .map_err(map_storage_error)?;
+        if plan.disposition != CleanupDisposition::Quarantine
+            || journal.disposition != plan.disposition
+            || item.quarantine_path.as_ref() != Some(&expected)
+        {
+            return Err(CleanupServiceError::ValidationFailed);
+        }
+        self.file_system
+            .guard_relocated_file(&expected, evidence.entry())
             .map_err(|_| CleanupServiceError::ValidationFailed)
     }
 
+    fn undo_storage(
+        &self,
+        plan: &CleanupPlan,
+        journal: &mut ExecutionJournal,
+    ) -> Result<CleanupExecutionSummary, CleanupServiceError> {
+        for index in 0..journal.items.len() {
+            if journal.items[index].state != ItemState::Quarantined {
+                continue;
+            }
+            let planned = plan
+                .items
+                .iter()
+                .find(|p| p.item_id == journal.items[index].item_id)
+                .ok_or(CleanupServiceError::ValidationFailed)?;
+            let CandidateProofScope::Storage { evidence } = &planned.proof.scope else {
+                return Err(CleanupServiceError::ValidationFailed);
+            };
+            let protection =
+                current_protection().map_err(|_| CleanupServiceError::ValidationFailed)?;
+            let root = &evidence.root().canonical_path;
+            let original = &evidence.entry().canonical_path;
+            if protection.is_protected(original)
+                || protection.is_repository_metadata(original)
+                || protection.is_protected(root)
+                || protection.is_repository_metadata(root)
+                || (matches!(
+                    evidence.as_ref(),
+                    cleanup_core::storage::StorageEvidence::BrowserCache { .. }
+                ) && crate::storage::browser::validate_current(evidence).is_err())
+                || (matches!(
+                    evidence.as_ref(),
+                    cleanup_core::storage::StorageEvidence::UserSelectedFile { .. }
+                        | cleanup_core::storage::StorageEvidence::DuplicateMember { .. }
+                ) && (!crate::storage::protection::personal_path_allowed(root)
+                    || !crate::storage::protection::personal_path_allowed(original)))
+            {
+                journal.items[index].failure = Some("restore-protection-rejected".into());
+                persist_accounting(&self.storage, journal)?;
+                continue;
+            }
+            let guard = match self.storage_recovery_guard(plan, journal, index) {
+                Ok(guard) => guard,
+                Err(_) => {
+                    journal.items[index].state = ItemState::Unknown;
+                    journal.items[index].failure = Some("recovery-identity-unproven".into());
+                    persist_accounting(&self.storage, journal)?;
+                    continue;
+                }
+            };
+            // Write intent before rename. Restart only proves recovery identity, never absence.
+            journal.completed_at = None;
+            journal.items[index].state = ItemState::Mutating;
+            persist_accounting(&self.storage, journal)?;
+            if guard.rename_to_original(evidence.root(), original).is_ok() {
+                journal.items[index].state = ItemState::Restored;
+                journal.items[index].failure = None;
+            } else {
+                journal.items[index].state = ItemState::Quarantined;
+                journal.items[index].failure = Some("restore-rejected".into());
+            }
+            persist_accounting(&self.storage, journal)?;
+        }
+        journal.completed_at = Some(now_seconds()?);
+        persist_accounting(&self.storage, journal)?;
+        Ok(summary(journal, &self.storage))
+    }
+
     fn reconcile_interrupted(&self) -> Result<(), CleanupServiceError> {
-        for mut journal in self.storage.executions().map_err(map_storage_error)? {
+        for record in self.storage.execution_records() {
+            let mut journal = record.map_err(map_storage_error)?;
             if journal.completed_at.is_some() {
                 continue;
             }
@@ -1116,8 +1505,25 @@ impl CleanupService {
                 .map_err(map_storage_error)?;
             if matches!(plan.scope, CleanupPlanScope::Storage { .. }) {
                 let valid = self.validate_current_scope(&plan).is_ok();
-                for item in &mut journal.items {
+                let recoverable: Vec<bool> = (0..journal.items.len())
+                    .map(|index| self.storage_recovery_guard(&plan, &journal, index).is_ok())
+                    .collect();
+                for (index, item) in journal.items.iter_mut().enumerate() {
                     if matches!(item.state, ItemState::Pending | ItemState::Mutating) {
+                        if plan.disposition == CleanupDisposition::Quarantine {
+                            if let Some(planned) =
+                                plan.items.iter().find(|p| p.item_id == item.item_id)
+                            {
+                                item.occupied_bytes =
+                                    item.occupied_bytes.max(planned.proof.allocated_bytes);
+                            }
+                            if recoverable[index] {
+                                item.state = ItemState::Quarantined;
+                                item.processed = true;
+                                item.failure = None;
+                                continue;
+                            }
+                        }
                         item.state = ItemState::Unknown;
                         item.failure = Some(
                             if valid {
@@ -1397,7 +1803,10 @@ fn persist_accounting(
             journal
                 .items
                 .iter()
-                .filter(|item| item.processed)
+                .filter(|item| {
+                    item.processed
+                        || (item.state == ItemState::Unknown && item.quarantine_path.is_some())
+                })
                 .map(|item| item.occupied_bytes),
         )?,
         reclaimed_bytes: checked_sum(journal.items.iter().map(|item| item.reclaimed_bytes))?,
@@ -1416,20 +1825,55 @@ fn checked_sum(mut values: impl Iterator<Item = u64>) -> Result<u64, CleanupServ
 fn item_outcome(item: &ExecutionItem) -> CleanupItemOutcome {
     CleanupItemOutcome {
         item_id: item.item_id.clone(),
+        display_path: None,
         state: item.state,
         logical_bytes: item.logical_bytes,
         failure: item.failure.clone(),
     }
 }
 
-fn summary(journal: &ExecutionJournal) -> CleanupExecutionSummary {
+fn outcome_display_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let mut chars = text.chars();
+    let mut display: String = chars.by_ref().take(1024).map(|c| {
+        if c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') { '\u{fffd}' } else { c }
+    }).collect();
+    if chars.next().is_some() {
+        display.push('…');
+    }
+    display
+}
+
+fn summary(journal: &ExecutionJournal, storage: &CleanupStorage) -> CleanupExecutionSummary {
+    // Plans already persist independently of scans. Missing legacy/corrupt metadata must
+    // not hide journal outcomes or grant any filesystem authority to the frontend.
+    let plan = storage.read_plan(&journal.plan_id).ok();
+    let paths: HashMap<_, _> = plan
+        .as_ref()
+        .map(|plan| {
+            plan.items
+                .iter()
+                .map(|item| (item.item_id.as_str(), &item.proof.path))
+                .collect()
+        })
+        .unwrap_or_default();
     CleanupExecutionSummary {
         execution_id: journal.execution_id.clone(),
         plan_id: journal.plan_id.clone(),
         disposition: journal.disposition,
         completed: journal.completed_at.is_some(),
         purge_after: journal.purge_after,
-        items: journal.items.iter().map(item_outcome).collect(),
+        items: journal
+            .items
+            .iter()
+            .map(|item| {
+                let mut outcome = item_outcome(item);
+                outcome.display_path = paths
+                    .get(item.item_id.as_str())
+                    .map(|path| outcome_display_path(path));
+                outcome
+            })
+            .collect(),
         accounting: journal.accounting.clone(),
     }
 }
@@ -1481,6 +1925,19 @@ fn divided_project_limits(divisor: usize) -> ScanLimits {
         max_diagnostics: (PROJECT_DISCOVERY_LIMITS.max_diagnostics / divisor).max(1),
         max_measurement_entries: (PROJECT_DISCOVERY_LIMITS.max_measurement_entries / divisor)
             .max(1),
+    }
+}
+
+/// Per-root discovery limits: the divided budgets with the saved profile's worker count.
+/// `seek_penalty` is only consulted for `ScanProfile::Auto` (see `workers_for_path`).
+fn project_root_limits(
+    base: ScanLimits,
+    profile: ScanProfile,
+    seek_penalty: Option<bool>,
+) -> ScanLimits {
+    ScanLimits {
+        max_workers: resolve_workers(profile, seek_penalty),
+        ..base
     }
 }
 
@@ -1541,6 +1998,10 @@ fn map_storage_error(error: StorageError) -> CleanupServiceError {
 }
 
 #[cfg(test)]
+#[path = "perf_disk_tests.rs"]
+mod perf_disk_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::cleanup::storage::{
@@ -1550,6 +2011,17 @@ mod tests {
         ArtifactRole, CandidateProofScope, GenerationState, Lifecycle, Markers, Provenance,
         RebuildCost, Risk, RuleRoot, ScannerKind, TargetType, snapshot_registered_path,
     };
+
+    #[test]
+    fn outcome_display_is_bounded_and_removes_control_and_direction_overrides() {
+        let text = format!("C:\\fixture\\\n\u{202e}{}", "a".repeat(2000));
+        let display = outcome_display_path(Path::new(&text));
+        assert_eq!(display.chars().count(), 1025);
+        assert!(display.ends_with('…'));
+        assert!(!display.contains('\n'));
+        assert!(!display.contains('\u{202e}'));
+        assert!(display.contains('\u{fffd}'));
+    }
 
     fn storage_file_fixture() -> (PathBuf, PathBuf, CleanupStorage, CleanupPlan, PathBuf) {
         use cleanup_core::storage::{
@@ -1599,6 +2071,734 @@ mod tests {
         (fixture, app_data, storage, plan, path)
     }
 
+    /// Adds a second user-selected file beside the fixture file, as its own plan item.
+    fn add_storage_file_item(plan: &mut CleanupPlan, name: &str) -> PathBuf {
+        use cleanup_core::storage::StorageEvidence;
+        let mut item = plan.items[0].clone();
+        let path = item.proof.path.with_file_name(name);
+        fs::write(&path, b"second item").unwrap();
+        let fs_native = WindowsFileSystem;
+        let meta = fs_native.metadata_no_follow(&path).unwrap();
+        let CandidateProofScope::Storage { evidence } = &item.proof.scope else {
+            unreachable!()
+        };
+        let StorageEvidence::UserSelectedFile { root, entry } = evidence.as_ref().clone() else {
+            unreachable!()
+        };
+        let entry = cleanup_core::storage::ObservedEntry {
+            canonical_path: path.clone(),
+            identity: meta.identity.unwrap(),
+            logical_bytes: meta.size,
+            allocated_bytes: Some(fs_native.allocated_size(&path, &meta).unwrap()),
+            modified_unix_nanos: meta
+                .modified
+                .unwrap()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+            ..entry
+        };
+        item.item_id = "e".repeat(32);
+        item.proof.path = path.clone();
+        item.proof.identity = entry.identity;
+        item.proof.logical_bytes = entry.logical_bytes;
+        item.proof.allocated_bytes = entry.allocated_bytes.unwrap();
+        item.proof.scope = CandidateProofScope::Storage {
+            evidence: Box::new(StorageEvidence::UserSelectedFile { root, entry }),
+        };
+        plan.items.push(item);
+        path
+    }
+
+    // Kudu reports a locked, missing or access-denied file per item and still cleans the
+    // rest. The execution gate must not refuse the whole plan for one such item.
+    #[test]
+    fn storage_execution_reports_in_use_and_not_found_per_item_and_cleans_the_rest() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let cases = [
+            CleanupDisposition::Quarantine,
+            CleanupDisposition::Permanent,
+        ]
+        .into_iter()
+        .flat_map(|disposition| [(disposition, false), (disposition, true)]);
+        for (case, (disposition, missing)) in cases.enumerate() {
+            {
+                let (fixture, app_data, storage, mut plan, blocked) = storage_file_fixture();
+                let other = add_storage_file_item(&mut plan, "other.bin");
+                plan.plan_id = format!("{:032x}", 0x500 + case);
+                plan.disposition = disposition;
+                storage.create_plan(&plan).unwrap();
+                let bytes = fs::read(&blocked).unwrap();
+                // No sharing: every later open of the file fails with a sharing violation.
+                let lock = (!missing).then(|| {
+                    fs::OpenOptions::new()
+                        .read(true)
+                        .share_mode(0)
+                        .open(&blocked)
+                        .unwrap()
+                });
+                if missing {
+                    fs::remove_file(&blocked).unwrap();
+                }
+                let service = CleanupService::new(app_data).unwrap();
+                let result = match disposition {
+                    CleanupDisposition::Permanent => service.execute_permanent(&plan.plan_id),
+                    _ => service.execute(&plan.plan_id),
+                }
+                .unwrap();
+                drop(lock);
+                let blocked_outcome = &result.items[0];
+                assert_eq!(blocked_outcome.state, ItemState::Failed);
+                assert_eq!(
+                    blocked_outcome.failure.as_deref(),
+                    Some(if missing { "not-found" } else { "in-use" })
+                );
+                if !missing {
+                    assert_eq!(fs::read(&blocked).unwrap(), bytes, "locked file untouched");
+                }
+                assert_eq!(
+                    result.items[1].state,
+                    if disposition == CleanupDisposition::Quarantine {
+                        ItemState::Quarantined
+                    } else {
+                        ItemState::Purged
+                    }
+                );
+                assert!(!other.exists());
+                drop(service);
+                fs::remove_dir_all(fixture).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn older_page_undo_restores_real_quarantine_bytes_after_restart() {
+        let (fixture, app_data, storage, _, _) = storage_file_fixture();
+        let mut fixtures = Vec::new();
+        let mut artifacts = Vec::new();
+        let service = CleanupService::new(app_data.clone()).unwrap();
+        let mut ids = Vec::new();
+        let mut payloads = Vec::new();
+        for index in 0..21 {
+            let (source_fixture, _, _, mut plan, payload) = storage_file_fixture();
+            fixtures.push(source_fixture);
+            artifacts.push(payload.clone());
+            plan.plan_id = format!("{:032x}", index + 1000);
+            plan.disposition = CleanupDisposition::Quarantine;
+            storage.create_plan(&plan).unwrap();
+            payloads.push(fs::read(&payload).unwrap());
+            let result = service.execute(&plan.plan_id).unwrap();
+            assert_eq!(result.items[0].state, ItemState::Quarantined);
+            assert!(!payload.exists());
+            let mut journal = storage.read_execution(&result.execution_id).unwrap();
+            let recovery = journal.items[0].quarantine_path.as_ref().unwrap();
+            assert_eq!(fs::read(recovery).unwrap(), payloads[index]);
+            // Deterministic immutable ordering, independent of the fixture's wall-clock speed.
+            journal.started_at = index as u64 + 1;
+            storage.write_execution(&journal).unwrap();
+            ids.push(result.execution_id);
+        }
+        let first = service.history_page(HistoryRequest::default()).unwrap();
+        assert_eq!(first.records.len(), 20);
+        assert_eq!(
+            first
+                .records
+                .iter()
+                .map(|row| &row.execution_id)
+                .collect::<Vec<_>>(),
+            ids[1..].iter().rev().collect::<Vec<_>>()
+        );
+        assert!(
+            first
+                .records
+                .iter()
+                .all(|row| row.items[0].state == ItemState::Quarantined)
+        );
+        drop(service);
+        let service = CleanupService::new(app_data).unwrap();
+        let older = service
+            .history_page(HistoryRequest {
+                cursor: first.next_cursor,
+                limit: None,
+            })
+            .unwrap();
+        assert_eq!(older.records.len(), 1);
+        assert!(older.next_cursor.is_none());
+        let oldest_id = &older.records[0].execution_id;
+        assert_eq!(oldest_id, &ids[0]);
+        assert_eq!(older.records[0].items[0].state, ItemState::Quarantined);
+        let restored = service.undo(oldest_id).unwrap();
+        assert_eq!(&restored.execution_id, oldest_id);
+        assert_eq!(restored.items[0].state, ItemState::Restored);
+        assert_eq!(fs::read(&artifacts[0]).unwrap(), payloads[0]);
+        for (index, id) in ids.iter().enumerate().skip(1) {
+            assert!(!artifacts[index].exists());
+            let journal = storage.read_execution(id).unwrap();
+            assert_eq!(journal.items[0].state, ItemState::Quarantined);
+            assert_eq!(
+                fs::read(journal.items[0].quarantine_path.as_ref().unwrap()).unwrap(),
+                payloads[index]
+            );
+        }
+        drop(service);
+        fs::remove_dir_all(fixture).unwrap();
+        for source_fixture in fixtures {
+            fs::remove_dir_all(source_fixture).unwrap();
+        }
+    }
+
+    #[test]
+    fn retained_history_regression_reaches_more_than_one_hundred_rows() {
+        let (fixture, app_data, storage, _, _) = storage_file_fixture();
+        let mut journal: ExecutionJournal =
+            serde_json::from_str(include_str!("fixtures/journal-v1-mutating.json")).unwrap();
+        journal.completed_at = Some(1);
+        for index in 0..121 {
+            journal.execution_id = format!("{index:032x}");
+            journal.started_at = index / 3;
+            storage.write_execution(&journal).unwrap();
+        }
+        let service = CleanupService::new(app_data).unwrap();
+        let mut cursor = None;
+        let mut seen = Vec::new();
+        loop {
+            let page = service
+                .history_page(HistoryRequest {
+                    cursor,
+                    limit: None,
+                })
+                .unwrap();
+            assert!(page.records.len() <= 20);
+            seen.extend(page.records.into_iter().map(|record| record.execution_id));
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        let expected: Vec<_> = (0..121)
+            .rev()
+            .map(|index| format!("{index:032x}"))
+            .collect();
+        assert_eq!(seen, expected);
+        drop(service);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn history_page_validates_boundaries_and_reports_invalid_journals() {
+        let (fixture, app_data, storage, _, _) = storage_file_fixture();
+        let service = CleanupService::new(app_data.clone()).unwrap();
+        assert!(
+            service
+                .history_page(HistoryRequest::default())
+                .unwrap()
+                .records
+                .is_empty()
+        );
+        for request in [
+            HistoryRequest {
+                cursor: None,
+                limit: Some(0),
+            },
+            HistoryRequest {
+                cursor: None,
+                limit: Some(101),
+            },
+            HistoryRequest {
+                cursor: Some(" ".repeat(257)),
+                limit: None,
+            },
+            HistoryRequest {
+                cursor: Some(
+                    HistoryCursor::encode(HistoryKind::Vendor, 0, &"a".repeat(32)).unwrap(),
+                ),
+                limit: None,
+            },
+        ] {
+            assert_eq!(
+                service.history_page(request).unwrap_err(),
+                CleanupServiceError::InvalidInput
+            );
+        }
+        for id in ["a", "../invalid", "0123456789abcdef0123456789abcdeg"] {
+            let cursor =
+                serde_json::json!({"version": 1, "kind": "cleanup", "timestamp": 0, "id": id})
+                    .to_string();
+            assert_eq!(
+                service
+                    .history_page(HistoryRequest {
+                        cursor: Some(cursor),
+                        limit: None
+                    })
+                    .unwrap_err(),
+                CleanupServiceError::InvalidInput
+            );
+        }
+        let mut journal: ExecutionJournal =
+            serde_json::from_str(include_str!("fixtures/journal-v1-mutating.json")).unwrap();
+        journal.completed_at = Some(1);
+        for index in 0..4 {
+            journal.execution_id = format!("{index:032x}");
+            journal.started_at = 1;
+            storage.write_execution(&journal).unwrap();
+        }
+        let first = service
+            .history_page(HistoryRequest {
+                cursor: None,
+                limit: Some(2),
+            })
+            .unwrap();
+        assert_eq!(first.records[0].execution_id, format!("{:032x}", 3));
+        // Changing an outcome and inserting a newer key must not shift the older boundary.
+        journal.completed_at = Some(2);
+        storage.write_execution(&journal).unwrap();
+        journal.execution_id = format!("{:032x}", 4);
+        journal.started_at = 2;
+        storage.write_execution(&journal).unwrap();
+        drop(service);
+        let service = CleanupService::new(app_data.clone()).unwrap();
+        let older = service
+            .history_page(HistoryRequest {
+                cursor: first.next_cursor,
+                limit: Some(2),
+            })
+            .unwrap();
+        assert_eq!(
+            older
+                .records
+                .iter()
+                .map(|record| record.execution_id.clone())
+                .collect::<Vec<_>>(),
+            vec![format!("{:032x}", 1), format!("{:032x}", 0)]
+        );
+        assert!(older.next_cursor.is_some());
+        let terminal = service
+            .history_page(HistoryRequest {
+                cursor: older.next_cursor,
+                limit: Some(2),
+            })
+            .unwrap();
+        assert!(terminal.records.is_empty());
+        assert!(terminal.next_cursor.is_none());
+        assert_eq!(
+            service
+                .history_page(HistoryRequest::default())
+                .unwrap()
+                .records[0]
+                .execution_id,
+            journal.execution_id
+        );
+        fs::write(
+            app_data
+                .join("cleanup")
+                .join("executions")
+                .join(format!("{}.json", journal.execution_id)),
+            b"invalid journal",
+        )
+        .unwrap();
+        assert!(service.history_page(HistoryRequest::default()).is_err());
+        drop(service);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn lifetime_journals_do_not_block_enumeration_or_startup() {
+        let (fixture, app_data, storage, _, path) = storage_file_fixture();
+        let mut journal: ExecutionJournal =
+            serde_json::from_str(include_str!("fixtures/journal-v1-mutating.json")).unwrap();
+        journal.completed_at = Some(1);
+        for index in 0..=MAX_ITEMS {
+            journal.execution_id = format!("{index:032x}");
+            storage.write_execution(&journal).unwrap();
+        }
+        let enumeration = storage
+            .execution_records()
+            .try_fold(0, |count, record| record.map(|_| count + 1));
+        let startup = CleanupService::new(app_data).map(|_| ());
+        assert!(path.exists());
+        fs::remove_dir_all(fixture).unwrap();
+        assert_eq!(
+            (enumeration, startup),
+            (Ok(MAX_ITEMS + 1), Ok(())),
+            "1001 valid retained records must enumerate and allow startup"
+        );
+    }
+
+    #[test]
+    fn lifetime_journals_preserve_interrupted_recovery_replay_and_history_pages() {
+        let (fixture, app_data, storage, permanent, path) = storage_file_fixture();
+        let mut plan = permanent.clone();
+        plan.plan_id = "e".repeat(32);
+        plan.disposition = CleanupDisposition::Quarantine;
+        storage.create_plan(&plan).unwrap();
+        let payload = fs::read(&path).unwrap();
+        let mut journal: ExecutionJournal =
+            serde_json::from_str(include_str!("fixtures/journal-v1-mutating.json")).unwrap();
+        journal.plan_id = plan.plan_id.clone();
+        journal.disposition = CleanupDisposition::Quarantine;
+        journal.purge_after = None;
+        journal.items[0].item_id = plan.items[0].item_id.clone();
+        // Every page contains interrupted records. Only the final journal has provable recovery.
+        for index in 0..=MAX_ITEMS {
+            journal.execution_id = format!("{index:032x}");
+            journal.started_at = (index / 3) as u64; // exercise timestamp ties
+            storage.write_execution(&journal).unwrap();
+        }
+        let recovery_id = journal.execution_id.clone();
+        let recovery = storage
+            .quarantine_directory(&recovery_id, &journal.items[0].item_id)
+            .unwrap();
+        fs::rename(&path, &recovery).unwrap(); // disposable fixture, no cleanup execution
+        journal.items[0].quarantine_path = Some(recovery.clone());
+        storage.write_execution(&journal).unwrap();
+        let service = CleanupService::new(app_data.clone()).unwrap();
+        let mut seen = HashSet::new();
+        for record in storage.execution_records() {
+            let record = record.unwrap();
+            assert!(seen.insert(record.execution_id.clone()));
+            assert!(record.completed_at.is_some());
+            assert_eq!(
+                record.items[0].state,
+                if record.execution_id == recovery_id {
+                    ItemState::Quarantined
+                } else {
+                    ItemState::Unknown
+                }
+            );
+        }
+        assert_eq!(seen.len(), MAX_ITEMS + 1);
+        assert_eq!(fs::read(&recovery).unwrap(), payload);
+        assert!(!path.exists());
+        assert_eq!(
+            service.execute(&plan.plan_id).unwrap_err(),
+            CleanupServiceError::Conflict
+        );
+        assert!(!storage.has_execution_for_plan(&permanent.plan_id).unwrap());
+        // Native permanent confirmation and execute both reject an already-used plan.
+        journal.execution_id = "f".repeat(32);
+        journal.plan_id = permanent.plan_id.clone();
+        journal.disposition = CleanupDisposition::Permanent;
+        journal.completed_at = Some(1);
+        journal.items[0].state = ItemState::Unknown;
+        journal.items[0].quarantine_path = None;
+        storage.write_execution(&journal).unwrap();
+        assert_eq!(
+            service.execute_permanent(&permanent.plan_id).unwrap_err(),
+            CleanupServiceError::Conflict
+        );
+        assert_eq!(
+            service
+                .confirm_permanent_with(
+                    &permanent.plan_id,
+                    1,
+                    crate::i18n::strings(crate::i18n::Locale::En),
+                    |_, _| panic!("replay prompted")
+                )
+                .unwrap_err(),
+            CleanupServiceError::Conflict
+        );
+
+        let mut before: Option<(u64, String)> = None;
+        let mut paged = HashSet::new();
+        loop {
+            let page = storage
+                .execution_page(
+                    before.as_ref().map(|(time, id)| (*time, id.as_str())),
+                    crate::cleanup::storage::MAX_EXECUTION_PAGE,
+                )
+                .unwrap();
+            assert!(page.len() <= crate::cleanup::storage::MAX_EXECUTION_PAGE);
+            if page.is_empty() {
+                break;
+            }
+            for record in &page {
+                let key = (record.started_at, record.execution_id.clone());
+                assert!(before.as_ref().is_none_or(|before| key < *before));
+                assert!(paged.insert(record.execution_id.clone()));
+                before = Some(key);
+            }
+        }
+        assert_eq!(paged.len(), MAX_ITEMS + 2);
+        assert!(seen.is_subset(&paged));
+        assert_eq!(
+            service
+                .history_page(HistoryRequest {
+                    cursor: None,
+                    limit: Some(crate::cleanup::storage::MAX_EXECUTION_PAGE)
+                })
+                .unwrap()
+                .records
+                .len(),
+            crate::cleanup::storage::MAX_EXECUTION_PAGE
+        );
+        // Enabled maintenance must traverse all records without purging uncertain/manual recovery.
+        storage
+            .write_policy(&AutoCleanupPolicy {
+                enabled: true,
+                ..Default::default()
+            })
+            .unwrap();
+        service.purge_due().unwrap();
+        assert_eq!(fs::read(&recovery).unwrap(), payload);
+        drop(service);
+        let service = CleanupService::new(app_data).unwrap();
+        assert_eq!(
+            service.undo(&recovery_id).unwrap().items[0].state,
+            ItemState::Restored
+        );
+        assert_eq!(fs::read(&path).unwrap(), payload);
+        assert_eq!(
+            storage
+                .execution_records()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .len(),
+            MAX_ITEMS + 2
+        );
+        drop(service);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn storage_confirmation_is_native_bounded_and_denial_never_mutates() {
+        let (fixture, app_data, storage, plan, path) = storage_file_fixture();
+        let service = CleanupService::new(app_data).unwrap();
+        for id in ["invalid", &"f".repeat(32)] {
+            assert!(
+                service
+                    .confirm_permanent_with(
+                        id,
+                        1,
+                        crate::i18n::strings(crate::i18n::Locale::En),
+                        |_, _| panic!("invalid plan prompted")
+                    )
+                    .is_err()
+            );
+        }
+        assert!(
+            service
+                .confirm_permanent_with(
+                    &plan.plan_id,
+                    0,
+                    crate::i18n::strings(crate::i18n::Locale::En),
+                    |_, _| panic!("zero owner prompted")
+                )
+                .is_err()
+        );
+        assert!(
+            service
+                .confirm_permanent_with(
+                    &plan.plan_id,
+                    1,
+                    crate::i18n::strings(crate::i18n::Locale::En),
+                    |_, text| {
+                        assert!(text.contains(&plan.plan_id));
+                        assert!(text.contains(&plan.items[0].item_id));
+                        assert!(text.len() < 20000);
+                        Ok(false)
+                    }
+                )
+                .is_err()
+        );
+        assert!(
+            service
+                .confirm_permanent_with(
+                    &plan.plan_id,
+                    1,
+                    crate::i18n::strings(crate::i18n::Locale::En),
+                    |_, _| Err(CleanupServiceError::OperationFailed)
+                )
+                .is_err()
+        );
+        assert!(path.exists());
+        assert!(storage.executions().unwrap().is_empty());
+        assert_eq!(
+            service
+                .confirm_permanent_with(
+                    &plan.plan_id,
+                    1,
+                    crate::i18n::strings(crate::i18n::Locale::En),
+                    |_, _| Ok(true)
+                )
+                .unwrap()
+                .items[0]
+                .state,
+            ItemState::Purged
+        );
+        assert!(!path.exists());
+        drop(service);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn storage_quarantine_identity_restart_collision_and_undo() {
+        let (fixture, app_data, storage, mut plan, path) = storage_file_fixture();
+        plan.plan_id = "e".repeat(32);
+        plan.disposition = CleanupDisposition::Quarantine;
+        storage.create_plan(&plan).unwrap();
+        let expected = storage
+            .expected_quarantine_path(&"f".repeat(32), &plan.items[0].item_id)
+            .unwrap();
+        assert!(!expected.parent().unwrap().exists());
+        assert!(
+            storage
+                .expected_quarantine_path("../bad", &plan.items[0].item_id)
+                .is_err()
+        );
+        let service = CleanupService::new(app_data.clone()).unwrap();
+        let result = service.execute(&plan.plan_id).unwrap();
+        assert_eq!(result.items[0].state, ItemState::Quarantined);
+        assert!(result.accounting.occupied_bytes > 0);
+        assert!(!path.exists());
+        let mut journal = storage.read_execution(&result.execution_id).unwrap();
+        let recovery = journal.items[0].quarantine_path.clone().unwrap();
+        assert_eq!(
+            WindowsFileSystem
+                .metadata_no_follow(&recovery)
+                .unwrap()
+                .identity,
+            Some(plan.items[0].proof.identity)
+        );
+        journal.completed_at = None;
+        journal.items[0].state = ItemState::Mutating;
+        storage.write_execution(&journal).unwrap();
+        drop(service);
+        let service = CleanupService::new(app_data.clone()).unwrap();
+        assert_eq!(
+            storage.read_execution(&result.execution_id).unwrap().items[0].state,
+            ItemState::Quarantined
+        );
+        fs::write(&path, b"collision").unwrap();
+        assert_eq!(
+            service.undo(&result.execution_id).unwrap().items[0].state,
+            ItemState::Quarantined
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"collision");
+        assert!(recovery.exists());
+        fs::remove_file(&path).unwrap();
+        // A post-rename journal failure must not turn absence into proof of restore.
+        service.storage.fail_write(2);
+        assert!(service.undo(&result.execution_id).is_err());
+        assert_eq!(
+            WindowsFileSystem
+                .metadata_no_follow(&path)
+                .unwrap()
+                .identity,
+            Some(plan.items[0].proof.identity)
+        );
+        drop(service);
+        let service = CleanupService::new(app_data).unwrap();
+        let interrupted = storage.read_execution(&result.execution_id).unwrap();
+        assert_eq!(interrupted.items[0].state, ItemState::Unknown);
+        assert!(interrupted.accounting.occupied_bytes > 0);
+        assert_eq!(
+            service.undo(&result.execution_id).unwrap().items[0].state,
+            ItemState::Unknown
+        );
+        drop(service);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn storage_recovery_success_and_intent_failure_preserve_identity() {
+        let (fixture, app_data, storage, mut plan, path) = storage_file_fixture();
+        plan.plan_id = "e".repeat(32);
+        plan.disposition = CleanupDisposition::Quarantine;
+        storage.create_plan(&plan).unwrap();
+        let service = CleanupService::new(app_data).unwrap();
+        service.storage.fail_write(2);
+        assert_eq!(
+            service.execute(&plan.plan_id).unwrap_err(),
+            CleanupServiceError::PersistenceFailed
+        );
+        assert_eq!(
+            WindowsFileSystem
+                .metadata_no_follow(&path)
+                .unwrap()
+                .identity,
+            Some(plan.items[0].proof.identity)
+        );
+        plan.plan_id = "f".repeat(32);
+        storage.create_plan(&plan).unwrap();
+        let result = service.execute(&plan.plan_id).unwrap();
+        assert_eq!(result.items[0].state, ItemState::Quarantined);
+        let recovered = service.undo(&result.execution_id).unwrap();
+        assert_eq!(recovered.items[0].state, ItemState::Restored);
+        assert_eq!(
+            WindowsFileSystem
+                .metadata_no_follow(&path)
+                .unwrap()
+                .identity,
+            Some(plan.items[0].proof.identity)
+        );
+        assert_eq!(
+            service.undo(&result.execution_id).unwrap().items[0].state,
+            ItemState::Restored
+        );
+        assert_eq!(
+            service.execute(&plan.plan_id).unwrap_err(),
+            CleanupServiceError::Conflict
+        );
+        drop(service);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    #[test]
+    fn storage_recovery_rejects_untrusted_paths_and_modified_identity() {
+        let (fixture, app_data, storage, mut plan, path) = storage_file_fixture();
+        plan.plan_id = "e".repeat(32);
+        plan.disposition = CleanupDisposition::Quarantine;
+        storage.create_plan(&plan).unwrap();
+        let service = CleanupService::new(app_data.clone()).unwrap();
+        let result = service.execute(&plan.plan_id).unwrap();
+        assert_eq!(result.items[0].state, ItemState::Quarantined);
+        let mut journal = storage.read_execution(&result.execution_id).unwrap();
+        let recovery = journal.items[0].quarantine_path.clone().unwrap();
+        let arbitrary = fixture.join("arbitrary.bin");
+        fs::write(&arbitrary, b"must survive").unwrap();
+        journal.items[0].quarantine_path = Some(arbitrary.clone());
+        storage.write_execution(&journal).unwrap();
+        assert_eq!(
+            service.undo(&result.execution_id).unwrap().items[0].state,
+            ItemState::Unknown
+        );
+        assert_eq!(fs::read(&arbitrary).unwrap(), b"must survive");
+        assert!(recovery.exists());
+        assert!(!path.exists());
+        journal.items[0].quarantine_path = Some(recovery.clone());
+        journal.items[0].state = ItemState::Quarantined;
+        storage.write_execution(&journal).unwrap();
+        // Original root replacement must not authorize restoration to the replacement.
+        let root = plan.items[0].proof.scan_root.clone();
+        let old_root = root.with_extension("original-root");
+        fs::rename(&root, &old_root).unwrap();
+        fs::create_dir(&root).unwrap();
+        assert_eq!(
+            service.undo(&result.execution_id).unwrap().items[0].state,
+            ItemState::Quarantined
+        );
+        assert!(recovery.exists());
+        fs::remove_dir(&root).unwrap();
+        fs::rename(&old_root, &root).unwrap();
+        fs::write(&recovery, b"changed recovery bytes").unwrap();
+        journal.completed_at = None;
+        journal.items[0].state = ItemState::Mutating;
+        storage.write_execution(&journal).unwrap();
+        drop(service);
+        let service = CleanupService::new(app_data).unwrap();
+        let unknown = storage.read_execution(&result.execution_id).unwrap();
+        assert_eq!(unknown.items[0].state, ItemState::Unknown);
+        assert!(unknown.accounting.occupied_bytes > 0);
+        assert_eq!(fs::read(&recovery).unwrap(), b"changed recovery bytes");
+        assert_eq!(
+            service.undo(&result.execution_id).unwrap().items[0].state,
+            ItemState::Unknown
+        );
+        assert!(!path.exists());
+        drop(service);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
     #[test]
     fn storage_mutating_journal_write_failure_preserves_source() {
         let (fixture, app_data, storage, plan, path) = storage_file_fixture();
@@ -1642,6 +2842,88 @@ mod tests {
         );
         drop(restarted);
         fs::remove_dir_all(fixture).unwrap();
+    }
+
+    // Undo is idempotent by design: repeating it reports the same restored outcome and never
+    // touches the restored file or anything later written at that path.
+    #[test]
+    fn storage_repeat_undo_is_idempotent_and_never_mutates_again() {
+        let (fixture, app_data, storage, mut plan, path) = storage_file_fixture();
+        plan.plan_id = "b".repeat(32);
+        plan.disposition = CleanupDisposition::Quarantine;
+        storage.create_plan(&plan).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let service = CleanupService::new(app_data).unwrap();
+        let result = service.execute(&plan.plan_id).unwrap();
+        assert_eq!(result.items[0].state, ItemState::Quarantined);
+        let first = service.undo(&result.execution_id).unwrap();
+        assert_eq!(first.items[0].state, ItemState::Restored);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let restored = WindowsFileSystem
+            .metadata_no_follow(&path)
+            .unwrap()
+            .identity;
+        let second = service.undo(&result.execution_id).unwrap();
+        assert_eq!(second.items[0].state, ItemState::Restored);
+        assert_eq!(
+            WindowsFileSystem
+                .metadata_no_follow(&path)
+                .unwrap()
+                .identity,
+            restored
+        );
+        fs::write(&path, b"newer user data").unwrap();
+        assert_eq!(
+            service.undo(&result.execution_id).unwrap().items[0].state,
+            ItemState::Restored
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"newer user data");
+        drop(service);
+        fs::remove_dir_all(fixture).unwrap();
+    }
+
+    // A plan is created from snapshot evidence; replacing the file afterwards (same path and
+    // bytes, new file identity) must be refused when the plan executes, for both dispositions.
+    #[test]
+    fn storage_execution_refuses_file_replaced_after_plan_creation() {
+        for disposition in [
+            CleanupDisposition::Quarantine,
+            CleanupDisposition::Permanent,
+        ] {
+            let (fixture, app_data, storage, mut plan, path) = storage_file_fixture();
+            plan.plan_id = "a".repeat(32);
+            plan.disposition = disposition;
+            storage.create_plan(&plan).unwrap();
+            let bytes = fs::read(&path).unwrap();
+            fs::remove_file(&path).unwrap();
+            fs::write(&path, &bytes).unwrap();
+            let replacement = WindowsFileSystem
+                .metadata_no_follow(&path)
+                .unwrap()
+                .identity;
+            assert_ne!(replacement, Some(plan.items[0].proof.identity));
+            let service = CleanupService::new(app_data).unwrap();
+            let outcome = match disposition {
+                CleanupDisposition::Permanent => service.execute_permanent(&plan.plan_id),
+                _ => service.execute(&plan.plan_id),
+            };
+            if let Ok(summary) = &outcome {
+                assert!(summary.items.iter().all(|item| !matches!(
+                    item.state,
+                    ItemState::Quarantined | ItemState::Purged | ItemState::Recycled
+                )));
+            }
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(
+                WindowsFileSystem
+                    .metadata_no_follow(&path)
+                    .unwrap()
+                    .identity,
+                replacement
+            );
+            drop(service);
+            fs::remove_dir_all(fixture).unwrap();
+        }
     }
 
     #[test]
@@ -1893,7 +3175,15 @@ mod tests {
                 serde_json::to_vec(&storage.executions().unwrap()).unwrap(),
                 before
             );
-            let execution = service.history().unwrap().pop().unwrap();
+            let execution = service
+                .history_page(HistoryRequest {
+                    cursor: None,
+                    limit: Some(crate::cleanup::storage::MAX_EXECUTION_PAGE),
+                })
+                .unwrap()
+                .records
+                .pop()
+                .unwrap();
             service.undo(&execution.execution_id).unwrap();
             assert!(artifacts[0].1.exists());
             assert_eq!(fs::read(&vendor_path).unwrap(), corrupt);
@@ -1919,7 +3209,15 @@ mod tests {
         assert_eq!(outcome.failed_items[0].item_id, plan.items[1].item_id);
         assert!(!artifacts[0].1.exists());
         let service = CleanupService::new(app_data).unwrap();
-        let execution = service.history().unwrap().pop().unwrap();
+        let execution = service
+            .history_page(HistoryRequest {
+                cursor: None,
+                limit: Some(crate::cleanup::storage::MAX_EXECUTION_PAGE),
+            })
+            .unwrap()
+            .records
+            .pop()
+            .unwrap();
         service.undo(&execution.execution_id).unwrap();
         assert!(artifacts[0].1.exists());
         assert!(!artifacts[1].1.exists());
@@ -2191,6 +3489,73 @@ mod tests {
         let reopened = CleanupService::new(root.clone()).unwrap();
         assert_eq!(reopened.policy().unwrap().grace_days, 14);
         assert!(!reopened.policy().unwrap().enabled);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_root_limits_apply_the_profile_workers_and_keep_divided_budgets() {
+        use crate::storage::scan_profile::{HDD_WORKERS, SSD_WORKERS};
+        let table = [
+            (ScanProfile::Ssd, None, SSD_WORKERS),
+            (ScanProfile::Hdd, None, HDD_WORKERS),
+            (ScanProfile::Auto, Some(false), SSD_WORKERS),
+            (ScanProfile::Auto, None, HDD_WORKERS),
+        ];
+        assert_eq!((SSD_WORKERS, HDD_WORKERS), (4, 2));
+        for divisor in [1, 3] {
+            let base = divided_project_limits(divisor);
+            for (profile, seek_penalty, expected) in table {
+                let limits = project_root_limits(base, profile, seek_penalty);
+                let context = format!("{profile:?} {seek_penalty:?} /{divisor}");
+                assert_eq!(limits.max_workers, expected, "{context}");
+                assert_eq!(
+                    limits.max_visited_entries, base.max_visited_entries,
+                    "{context}"
+                );
+                assert_eq!(limits.max_candidates, base.max_candidates, "{context}");
+                assert_eq!(limits.max_diagnostics, base.max_diagnostics, "{context}");
+                assert_eq!(
+                    limits.max_measurement_entries, base.max_measurement_entries,
+                    "{context}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scan_settings_and_profile_persist_and_report_auto_when_corrupt() {
+        let root = std::env::temp_dir().join(format!(
+            "supa-diska-scan-profile-{}-{}",
+            std::process::id(),
+            getrandom::u64().unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let service = CleanupService::new(root.clone()).unwrap();
+        assert_eq!(service.scan_profile(), ScanProfile::Auto);
+        service.set_scan_profile(ScanProfile::Ssd).unwrap();
+        assert_eq!(service.scan_profile(), ScanProfile::Ssd);
+        drop(service);
+
+        let reopened = CleanupService::new(root.clone()).unwrap();
+        assert_eq!(reopened.scan_profile(), ScanProfile::Ssd);
+        std::fs::write(root.join("cleanup").join("scan-settings.json"), b"{").unwrap();
+        assert_eq!(reopened.scan_settings().unwrap(), ScanSettings::default());
+        assert_eq!(reopened.scan_profile(), ScanProfile::Auto);
+
+        let settings_path = root.join("cleanup").join("scan-settings.json");
+        for bytes in [
+            &br#"{"schemaVersion":2,"profile":"ssd"}"#[..],
+            br#"{"schemaVersion":1,"profile":"turbo"}"#,
+        ] {
+            std::fs::write(&settings_path, bytes).unwrap();
+            assert_eq!(reopened.scan_settings().unwrap(), ScanSettings::default());
+            assert_eq!(reopened.scan_profile(), ScanProfile::Auto);
+        }
+
+        // Saving a valid profile replaces the corrupt file.
+        reopened.set_scan_profile(ScanProfile::Hdd).unwrap();
+        assert_eq!(reopened.scan_settings().unwrap().profile, ScanProfile::Hdd);
+        assert_eq!(reopened.scan_profile(), ScanProfile::Hdd);
         std::fs::remove_dir_all(root).unwrap();
     }
 

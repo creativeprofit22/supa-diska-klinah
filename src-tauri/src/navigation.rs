@@ -12,7 +12,7 @@ pub(crate) fn is_allowed_navigation(url: &Url, development: bool) -> bool {
             || (development
                 && url.scheme() == "http"
                 && url.host_str() == Some("127.0.0.1")
-                && url.port() == Some(1420)))
+                && url.port() == Some(1520)))
 }
 
 pub(crate) fn plugin<R: Runtime>() -> TauriPlugin<R> {
@@ -37,7 +37,7 @@ mod tests {
             "https://tauri.localhost/",
             "http://tauri.localhost.evil.invalid/",
             "http://user@tauri.localhost/",
-            "http://127.0.0.1:1420/",
+            "http://127.0.0.1:1520/",
             "https://example.com/",
             "file:///C:/Windows/System32/cmd.exe",
         ] {
@@ -48,15 +48,17 @@ mod tests {
     #[test]
     fn development_allows_only_the_exact_vite_origin() {
         assert!(is_allowed_navigation(
-            &"http://127.0.0.1:1420/dashboard".parse().unwrap(),
+            &"http://127.0.0.1:1520/dashboard".parse().unwrap(),
             true,
         ));
         for denied in [
-            "http://localhost:1420/",
+            "http://localhost:1520/",
             "http://127.0.0.1/",
+            "http://127.0.0.1:1521/",
+            "http://127.0.0.1:1420/", // Reserved for GG Coder, never navigable here.
             "http://127.0.0.1:1421/",
-            "https://127.0.0.1:1420/",
-            "http://127.0.0.1.evil.invalid:1420/",
+            "https://127.0.0.1:1520/",
+            "http://127.0.0.1.evil.invalid:1520/",
         ] {
             assert!(!is_allowed_navigation(&denied.parse().unwrap(), true));
         }

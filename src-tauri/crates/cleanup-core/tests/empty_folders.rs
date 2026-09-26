@@ -121,6 +121,9 @@ fn empty_folders_recursive_complete_evidence_and_all_blockers() {
         "depth",
         "cancel",
         "unknown",
+        "protected-name",
+        "profile-folder",
+        "desktop-elsewhere",
     ] {
         let (mut fs, root, policy) = fixture();
         let child = root.canonical_path.join("a/b/c");
@@ -134,12 +137,22 @@ fn empty_folders_recursive_complete_evidence_and_all_blockers() {
         if mode.starts_with("hidden") {
             fs.hidden = Some(child.clone());
         }
-        if mode == "protected" {
+        let renamed = match mode {
+            "protected" => Some(".git"),
+            "protected-name" => Some("node_modules"),
+            "profile-folder" | "desktop-elsewhere" => Some("Desktop"),
+            _ => None,
+        };
+        if let Some(name) = renamed {
             let m = fs.entries.remove(&child).unwrap();
-            fs.entries.insert(root.canonical_path.join("a/b/.git"), m);
+            fs.entries
+                .insert(root.canonical_path.join("a/b").join(name), m);
         }
         let cancellation = CancellationToken::new();
-        let mut folders = empty_folders::EmptyFolders::default();
+        // In "profile-folder" a/b plays the user profile, so a/b/Desktop is protected.
+        let mut folders = empty_folders::EmptyFolders::new(
+            (mode == "profile-folder").then(|| root.canonical_path.join("a/b")),
+        );
         let limits = StorageLimits {
             depth: if mode == "depth" { 2 } else { 64 },
             ..Default::default()
@@ -167,7 +180,7 @@ fn empty_folders_recursive_complete_evidence_and_all_blockers() {
             },
         );
         let rows = folders.finish();
-        if mode == "empty" {
+        if mode == "empty" || mode == "desktop-elsewhere" {
             assert!(result.unwrap().completeness.is_complete());
             assert_eq!(rows.len(), 3);
             for (index, (row, evidence)) in rows.iter().enumerate() {
