@@ -577,6 +577,14 @@ Phase: diagnostics and protection parity ([ADR 0003](../adr/0003-local-first-pro
 
 Manual Windows acceptance for protection was **accepted by the owner on 2026-09-24** (see [protection verification](protection.md)). The 4 build-artifact timeouts and the Vitest start-up timeouts remain open harness blockers; storage manual step 8 is unaffected.
 
+## Performance harness evidence notes: 2026-09-25 UTC
+
+These are measurement-quality blockers for the performance phase ([performance verification](performance.md)), not product defects:
+
+- **Foreign build contention.** Another project's `cargo build`/`cargo test` ran on the same machine during several compile benchmarks (baseline execution `fe1f7813-0898-440a-9d0d-68dbfe027443`, trial pair 2 execution `c13399a6-f018-47f1-84b1-121917d9a903`). The harness now records it per iteration and every 5 s in `contention`; affected runs are only compared with runs under similar load.
+- **Machine sleep during a benchmark.** One `rust-lld` sample (trial execution `7ffcd696-e8cf-4771-86b8-2b3b18a00591`) spanned a 68-minute sleep. Sleep events are now captured in `sleepEvents`, and `check-budgets.mjs` marks such machine-speed results `invalid`.
+- **Operator-only scenarios still open:** Recycle Bin disk runs, the interactive in-app scan, cold-cache HDD runs and the CI caching workflow have not run.
+
 ## Completion remains gated
 
 **2026-09-23: the project owner waived Narrator verification for this phase.** The app is for

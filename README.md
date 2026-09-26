@@ -51,6 +51,8 @@ The x64 executable is launched locally as a smoke check. GitHub Actions builds a
 - [Cleanup execution and recovery](docs/cleanup-recovery.md)
 - [Project artifact discovery](docs/project-artifacts.md)
 - [Safe post-build artifact budgets](docs/build-artifact-budgets.md)
+- [Performance methodology, results and budgets](docs/performance.md)
+- [Performance verification runs](docs/verification/performance.md)
 - [Windows release checklist](docs/release-checklist.md)
 - [Windows development and troubleshooting](docs/development.md)
 - [System management user guide](docs/system-management.md)

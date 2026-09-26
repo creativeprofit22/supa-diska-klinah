@@ -6,6 +6,8 @@ const requiredDocuments = [
   "docs/cleanup-rules.md",
   "docs/development.md",
   "docs/parity.md",
+  "docs/performance.md",
+  "docs/verification/performance.md",
   "docs/project-artifacts.md",
   "docs/release-checklist.md",
   "docs/security.md",
@@ -83,4 +85,20 @@ for (const page of ["disk-analyzer-readonly", "large-files", "cleaner", "duplica
     process.exit(1);
   }
 }
-console.log("Threat model, privilege inventory, recovery, storage evidence, and README links verified.");
+const performance = readFileSync("docs/performance.md", "utf8");
+for (const heading of [
+  "## Methodology",
+  "## Hardware",
+  "## Corpora",
+  "## How to run",
+  "## Results",
+  "## Budgets",
+  "## Accepted and rejected optimizations",
+  "## Limitations",
+]) {
+  if (!performance.includes(heading)) {
+    console.error(`Documentation check failed: performance guide lacks ${heading}`);
+    process.exit(1);
+  }
+}
+console.log("Threat model, privilege inventory, recovery, storage evidence, performance, and README links verified.");
