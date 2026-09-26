@@ -1860,15 +1860,35 @@ mod tests {
         (root, manager, approver, runner, input)
     }
 
+    /// Wall-clock bound for runs driven by the in-process `TestRunner`.
+    const MOCK_RUN_DEADLINE: Duration = Duration::from_secs(30);
+    /// Wall-clock bound for runs that spawn a real `cargo build`; generous so a
+    /// loaded CI host (parallel tests, antivirus, slow disk) does not flake.
+    const REAL_CARGO_RUN_DEADLINE: Duration = Duration::from_secs(300);
+
     fn wait_for_terminal(manager: &BuildArtifactManager, run_id: &str) -> BuildRun {
-        for _ in 0..2_000 {
+        wait_for_terminal_within(manager, run_id, MOCK_RUN_DEADLINE)
+    }
+
+    fn wait_for_terminal_within(
+        manager: &BuildArtifactManager,
+        run_id: &str,
+        budget: Duration,
+    ) -> BuildRun {
+        let started = Instant::now();
+        loop {
             let run = manager.run(run_id).unwrap();
             if run.state.terminal() {
                 return run;
             }
-            thread::sleep(Duration::from_millis(1));
+            if started.elapsed() >= budget {
+                panic!(
+                    "build run {run_id} did not finish within {budget:?}; last state {:?}",
+                    run.state
+                );
+            }
+            thread::sleep(Duration::from_millis(10));
         }
-        panic!("build run did not finish")
     }
 
     #[test]
@@ -2720,7 +2740,7 @@ mod tests {
             .unwrap();
         let run = manager.start_run(&release.profile_id).unwrap();
         assert_eq!(
-            wait_for_terminal(&manager, &run.run_id).state,
+            wait_for_terminal_within(&manager, &run.run_id, REAL_CARGO_RUN_DEADLINE).state,
             BuildRunState::Succeeded
         );
         let debug = manager
@@ -2746,7 +2766,7 @@ mod tests {
             .unwrap();
         let run = manager.start_run(&debug.profile_id).unwrap();
         assert_eq!(
-            wait_for_terminal(&manager, &run.run_id).state,
+            wait_for_terminal_within(&manager, &run.run_id, REAL_CARGO_RUN_DEADLINE).state,
             BuildRunState::Succeeded
         );
         let executable = root.join("target/debug/artifact-budget-fixture.exe");
@@ -2772,7 +2792,7 @@ mod tests {
 
         let run = manager.start_run(&debug.profile_id).unwrap();
         assert_eq!(
-            wait_for_terminal(&manager, &run.run_id).state,
+            wait_for_terminal_within(&manager, &run.run_id, REAL_CARGO_RUN_DEADLINE).state,
             BuildRunState::Succeeded
         );
         assert_eq!(
