@@ -1,9 +1,14 @@
 import { useEffect } from "react";
+import { useStrings } from "../../shared/i18n/I18nProvider";
 import { ArtifactBudgetSettings } from "../build-artifacts/ArtifactBudgetSettings";
 import { useSettingsState } from "./model/useSettingsState";
+import { LanguageSettings } from "./LanguageSettings";
+import { UpdateSettings } from "./UpdateSettings";
 import { ScanSpeedSettings } from "./ScanSpeedSettings";
+import { settingsStrings } from "./strings";
 
 export function SettingsPage() {
+  const t = useStrings(settingsStrings);
   const {
     policy,
     loading,
@@ -17,26 +22,26 @@ export function SettingsPage() {
   } = useSettingsState();
 
   useEffect(() => {
-    document.title = "Settings | Supa Diska Klinah";
-  }, []);
+    document.title = t.documentTitle;
+  }, [t]);
 
   return (
     <section aria-labelledby="settings-heading">
       <header className="page-header">
-        <p className="kicker">Preferences</p>
-        <h1 id="settings-heading">Settings</h1>
-        <p>Cleanup preferences are saved on this device.</p>
+        <p className="kicker">{t.kicker}</p>
+        <h1 id="settings-heading">{t.heading}</h1>
+        <p>{t.intro}</p>
       </header>
 
       <div className="settings-panel" aria-busy={loading || saving}>
-        <h2>Automatic cleanup</h2>
-        <p>When enabled, eligible temporary caches enter app-managed quarantine at startup.</p>
-        {loading && <p role="status">Loading cleanup settings…</p>}
+        <h2>{t.autoCleanup.heading}</h2>
+        <p>{t.autoCleanup.description}</p>
+        {loading && <p role="status">{t.autoCleanup.loading}</p>}
         {error === "load" && (
           <div className="error-state" role="alert">
-            <p>Cleanup settings could not be loaded.</p>
+            <p>{t.autoCleanup.loadError}</p>
             <button type="button" className="secondary-button" onClick={() => void loadPolicy()}>
-              Try again
+              {t.tryAgain}
             </button>
           </div>
         )}
@@ -49,8 +54,8 @@ export function SettingsPage() {
           >
             <label className="toggle-row">
               <span>
-                <strong>Clean temporary caches at startup</strong>
-                <small>Off by default. Disabling stops future quarantine and purge.</small>
+                <strong>{t.autoCleanup.enabledLabel}</strong>
+                <small>{t.autoCleanup.enabledHint}</small>
               </span>
               <input
                 type="checkbox"
@@ -61,8 +66,8 @@ export function SettingsPage() {
             </label>
             <label className="settings-field">
               <span>
-                <strong>Recovery grace period</strong>
-                <small>Quarantined items remain undoable until this period ends.</small>
+                <strong>{t.autoCleanup.graceLabel}</strong>
+                <small>{t.autoCleanup.graceHint}</small>
               </span>
               <select
                 value={policy.graceDays}
@@ -71,32 +76,32 @@ export function SettingsPage() {
               >
                 {[1, 3, 7, 14, 30].map((days) => (
                   <option key={days} value={days}>
-                    {days} {days === 1 ? "day" : "days"}
+                    {t.autoCleanup.graceDays(days)}
                   </option>
                 ))}
               </select>
             </label>
-            <p className="settings-note">
-              Due quarantine is permanently purged during a later startup maintenance pass.
-            </p>
+            <p className="settings-note">{t.autoCleanup.purgeNote}</p>
             {error === "save" && (
               <div className="error-state" role="alert">
-                <p>Cleanup settings could not be saved. Your changes remain unsaved.</p>
+                <p>{t.autoCleanup.saveError}</p>
               </div>
             )}
             {saved && (
               <p className="status-message" role="status">
-                Cleanup settings saved.
+                {t.autoCleanup.saved}
               </p>
             )}
             <div className="button-row">
               <button type="submit" disabled={saving || !dirty}>
-                {saving ? "Saving…" : "Save changes"}
+                {saving ? t.saving : t.autoCleanup.save}
               </button>
             </div>
           </form>
         )}
       </div>
+      <LanguageSettings />
+      <UpdateSettings />
       <ScanSpeedSettings />
       <ArtifactBudgetSettings />
     </section>

@@ -1,9 +1,12 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useStrings } from "../i18n/I18nProvider";
 import { releaseStorageScan, storageError } from "./api";
+import { storageStrings } from "./strings";
 import { validId, type RootChoice, type StorageModule } from "./types";
 
 /** Owns unused native authorizations, never paths as authority. */
 export function useStorageRoot(module: StorageModule) {
+  const t = useStrings(storageStrings);
   const [choice, setChoice] = useState<RootChoice | null>(null);
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +49,7 @@ export function useStorageRoot(module: StorageModule) {
       setChoice(root); setAvailable(true);
       if (previous && previous.rootId !== root.rootId) await release(previous);
     } catch (cause) {
-      if (mounted.current && version === generation.current) setError(storageError(cause));
+      if (mounted.current && version === generation.current) setError(storageError(cause, t.errors));
     } finally {
       if (mounted.current && version === generation.current) { locked.current = false; setPicking(false); }
     }

@@ -1,5 +1,15 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useStrings } from "../../shared/i18n/I18nProvider";
 import { cancelVendorJob, confirmVendorJob, pending, prepareVendorJob, releaseVendorJob, vendorError, vendorJobHistory, vendorJobStatus, type VendorJob } from "./api";
+import { type UninstallerStrings, uninstallerStrings } from "./strings";
+
+/** Error state keeps a message descriptor so the text follows the active language. */
+type JobMessage =
+  | { kind: "job"; key: Exclude<keyof UninstallerStrings["jobErrors"], "historyLoad"> }
+  | { kind: "vendor"; reason: unknown };
+function messageText(message: JobMessage, t: UninstallerStrings): string {
+  return message.kind === "job" ? t.jobErrors[message.key] : vendorError(message.reason, t.errors);
+}
 
 async function discard(job: VendorJob) {
   if (job.state !== "awaitingConfirmation") return;
@@ -9,10 +19,11 @@ async function discard(job: VendorJob) {
   } catch { /* Backend expiry retires abandoned consent; never infer successful cancellation. */ }
 }
 export function useVendorJobs(scopeKey: string) {
+  const t = useStrings(uninstallerStrings);
   const [job, setJob] = useState<VendorJob | null>(null);
   const [history, setHistory] = useState<VendorJob[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<JobMessage | null>(null);
   const generation = useRef(0);
   const current = useRef<VendorJob | null>(null);
   const submitted = useRef(false);
@@ -20,7 +31,7 @@ export function useVendorJobs(scopeKey: string) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyFailed, setHistoryFailed] = useState(false);
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [historyNextCursor, setHistoryNextCursor] = useState<string | null>(null);
   const historyGeneration = useRef(0);
@@ -43,7 +54,7 @@ export function useVendorJobs(scopeKey: string) {
     const selected = locked.current ? null : current.current;
     const isCurrent = () => historyMounted.current && version === historyGeneration.current;
     const isSelected = () => isCurrent() && scope === generation.current && poll === pollVersion.current && selected === current.current && !locked.current;
-    setHistoryLoading(true); setHistoryError(null);
+    setHistoryLoading(true); setHistoryFailed(false);
     const request = (async () => {
       try {
         const result = await vendorJobHistory({ cursor, limit: 64 });
@@ -59,20 +70,18 @@ export function useVendorJobs(scopeKey: string) {
             // A submitted or retired receipt must never regain confirmation authority.
             if (next.state === "awaitingConfirmation" && (submitted.current || unavailable.current || selected.state !== "awaitingConfirmation")) throw new Error("Retired review");
             reconcile(next);
-            if (!submitted.current && next.state === "cancelledBeforeLaunch") setError("Program evidence expired or was retired. Refresh inventory and review again.");
+            if (!submitted.current && next.state === "cancelledBeforeLaunch") setError({ kind: "job", key: "evidenceRetired" });
           } catch {
             if (!isSelected()) return;
             pollVersion.current++;
             if (timer.current !== null) clearTimeout(timer.current);
             timer.current = null;
             unavailable.current = true; setReviewUnavailable(true);
-            setError(submitted.current
-              ? "The submitted job outcome is unknown. Refresh retained history to check again; do not retry the vendor operation."
-              : "Program evidence is unavailable or expired. Refresh inventory and review again.");
+            setError({ kind: "job", key: submitted.current ? "submittedUnknown" : "evidenceUnavailable" });
           }
         }
       } catch {
-        if (isCurrent()) setHistoryError("Retained history could not be loaded. Refresh retained history to try again. History browsing does not start vendor jobs.");
+        if (isCurrent()) setHistoryFailed(true);
       } finally {
         historyFlight.current = null;
         if (isCurrent()) setHistoryLoading(false);
@@ -112,14 +121,14 @@ export function useVendorJobs(scopeKey: string) {
       if (refresh && next.state !== "awaitingConfirmation") void loadHistory(null);
       return;
     }
-    if (++polls.current > 2400) { setError("Polling limit reached. The vendor was not stopped. Refresh retained history for its outcome."); return; }
+    if (++polls.current > 2400) { setError({ kind: "job", key: "pollingLimit" }); return; }
     timer.current = setTimeout(() => {
       timer.current = null;
       void vendorJobStatus(next.jobId).then(result => {
         if (version !== generation.current || poll !== pollVersion.current) return;
         if (result.jobId !== next.jobId || result.programId !== next.programId || result.state === "awaitingConfirmation") throw new Error("Mismatched job");
         accept(result, version);
-      }).catch(e => { if (version === generation.current && poll === pollVersion.current) setError(vendorError(e)); });
+      }).catch((e: unknown) => { if (version === generation.current && poll === pollVersion.current) setError({ kind: "vendor", reason: e }); });
     }, 750);
   };
   const refreshHistory = () => {
@@ -135,7 +144,7 @@ export function useVendorJobs(scopeKey: string) {
       if (version !== generation.current) { await discard(result); return; }
       if (result.programId !== programId || result.state !== "awaitingConfirmation") { await discard(result); throw new Error("Mismatched review"); }
       accept(result, version);
-    } catch (e) { if (version === generation.current) setError(vendorError(e)); }
+    } catch (e) { if (version === generation.current) setError({ kind: "vendor", reason: e }); }
     finally { if (version === generation.current) { locked.current = false; setBusy(false); } }
   };
   const confirm = async () => {
@@ -148,7 +157,7 @@ export function useVendorJobs(scopeKey: string) {
       if (result.jobId !== review.jobId || result.programId !== review.programId) throw new Error("Mismatched vendor job");
       accept(result, version);
     }
-    catch (e) { if (version === generation.current) { setError(vendorError(e)); void loadHistory(null); } }
+    catch (e) { if (version === generation.current) { setError({ kind: "vendor", reason: e }); void loadHistory(null); } }
     finally { if (version === generation.current) { locked.current = false; setBusy(false); } }
   };
   const cancel = async () => {
@@ -164,8 +173,9 @@ export function useVendorJobs(scopeKey: string) {
       if (result.jobId !== review.jobId || result.programId !== review.programId) throw new Error("Mismatched vendor job");
       accept(result, version);
     }
-    catch (e) { if (version === generation.current) setError(vendorError(e)); }
+    catch (e) { if (version === generation.current) setError({ kind: "vendor", reason: e }); }
     finally { if (version === generation.current) { locked.current = false; setBusy(false); } }
   };
-  return { job, reviewUnavailable, history, historyLoading, historyLoaded, historyError, historyCursor, historyNextCursor, olderHistory, busy, error, prepare, confirm, cancel, refreshHistory, submitted: submitted.current };
+  const historyError = historyFailed ? t.jobErrors.historyLoad : null;
+  return { job, reviewUnavailable, history, historyLoading, historyLoaded, historyError, historyCursor, historyNextCursor, olderHistory, busy, error: error && messageText(error, t), prepare, confirm, cancel, refreshHistory, submitted: submitted.current };
 }

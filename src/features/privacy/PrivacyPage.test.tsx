@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanTicket, SystemChange } from "../../shared/system-change/types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { PrivacyPage } from "./PrivacyPage";
 import type { PrivacyReport } from "./types";
 
@@ -92,4 +93,10 @@ it("offers only tasks whose state differs from the recommendation", async () => 
   expect(screen.queryByRole("checkbox", { name: /CEIP consolidator/ })).toBeNull();
   expect(await review("Apply recommended for Compatibility appraiser")).toEqual([[{ kind: "setSystemTaskEnabled", catalogId: "compatAppraiser", enabled: false }]]);
   await waitFor(() => expect(calls("create_system_change_plan")).toHaveLength(1));
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><PrivacyPage /></I18nProvider>);
+  expect(await screen.findByRole("heading", { name: "Tareas programadas" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "Privacidad" })).toBeTruthy();
 });

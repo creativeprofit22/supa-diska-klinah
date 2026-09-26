@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanTicket, SystemChange } from "../../shared/system-change/types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { descriptionError, MAX_DESCRIPTION, RestorePage } from "./RestorePage";
 import type { RestorePointList, RestoreProtection } from "./types";
 
@@ -104,4 +105,10 @@ it("accepts and sends a 128-character description", async () => {
   const calls = called("create_system_change_plan");
   expect(calls).toHaveLength(1);
   expect(decode(calls[0][1])).toEqual({ changes: [{ kind: "createRestorePoint", description: value }] });
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><RestorePage /></I18nProvider>);
+  expect(await screen.findByRole("heading", { name: "Protección" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "Puntos de restauración" })).toBeTruthy();
 });

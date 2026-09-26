@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { LargeFilesPage } from "./LargeFilesPage";
 import type { LargeFileRow } from "./types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -139,4 +140,12 @@ it("clears selection when paging fails with expired evidence", async () => {
   getPage = async () => { throw { code: "snapshot_unavailable" }; };
   fireEvent.click(screen.getByRole("button", { name: "Next page" })); await screen.findByText(/These results expired/);
   expect(review().disabled).toBe(true); expect(screen.queryByRole("list", { name: "Large file results" })).toBeNull();
+});
+
+it("renders Spanish copy for es-MX", () => {
+  render(<I18nProvider languages={["es-MX"]}><LargeFilesPage /></I18nProvider>);
+  expect(screen.getByRole("heading", { name: "Archivos grandes" })).toBeTruthy();
+  expect(screen.getByLabelText<HTMLInputElement>("Tamaño mínimo (MiB)").value).toBe("10");
+  expect(screen.getByRole("option", { name: "Fecha de modificación" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Buscar archivos grandes" })).toBeTruthy();
 });

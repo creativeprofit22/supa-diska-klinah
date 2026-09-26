@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { formatBytes } from "../../shared/format";
+import { useFormat, useStrings } from "../../shared/i18n/I18nProvider";
 import { systemChangeError } from "../../shared/system-change/api";
+import { systemChangeStrings } from "../../shared/system-change/strings";
 import { SystemChangeJournal } from "../../shared/system-change/SystemChangeJournal";
 import { SystemChangeReview } from "../../shared/system-change/SystemChangeReview";
 import type { SystemChange } from "../../shared/system-change/types";
 import { getPowerStatus } from "./api";
+import { powerStrings } from "./strings";
 import type { PowerStatus } from "./types";
 
 export function PowerPage() {
+  const t = useStrings(powerStrings);
+  const errors = useStrings(systemChangeStrings).errors;
+  const fmt = useFormat();
   const [status, setStatus] = useState<PowerStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -23,11 +28,11 @@ export function PowerPage() {
       setToggleHibernation(false);
       setScheme(null);
     } catch (reason) {
-      setError(systemChangeError(reason));
+      setError(systemChangeError(reason, errors));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [errors]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -43,48 +48,48 @@ export function PowerPage() {
 
   const describe = useCallback((change: SystemChange): string => {
     switch (change.kind) {
-      case "setHibernation": return `Turn hibernation ${change.enabled ? "on" : "off"}`;
+      case "setHibernation": return t.describeHibernation(change.enabled);
       case "setActivePowerScheme": {
         const name = status?.schemes.find((entry) => entry.id === change.scheme)?.name ?? change.scheme;
-        return `Switch power plan: ${name}`;
+        return t.describeScheme(name);
       }
       default: return change.kind;
     }
-  }, [status]);
+  }, [status, t]);
 
   const onFinished = useCallback(() => { setJournalKey((n) => n + 1); void refresh(); }, [refresh]);
   const checkedScheme = scheme ?? activeId;
 
   return <section className="power-page" aria-labelledby="power-title">
     <header className="page-header"><div>
-      <p className="eyebrow">System</p>
-      <h1 id="power-title">Power and hibernation</h1>
-      <p>See the hibernation state and the active power plan; changes only happen after you select them and confirm in Windows.</p>
+      <p className="eyebrow">{t.eyebrow}</p>
+      <h1 id="power-title">{t.title}</h1>
+      <p>{t.intro}</p>
     </div></header>
-    <button type="button" disabled={loading} onClick={() => void refresh()}>Refresh</button>
-    {loading && <p role="status">Reading power settings…</p>}
+    <button type="button" disabled={loading} onClick={() => void refresh()}>{t.refresh}</button>
+    {loading && <p role="status">{t.loading}</p>}
     {error && <p role="alert">{error}</p>}
     {status && hibernation && <>
       <section aria-labelledby="power-hibernation">
-        <h2 id="power-hibernation">Hibernation</h2>
+        <h2 id="power-hibernation">{t.hibernationTitle}</h2>
         {hibernation.supported ? <>
           <p>
-            Hibernation is {hibernation.enabled ? "on" : "off"}.
-            {hibernation.hiberfileBytes !== null && ` The hibernation file uses ${formatBytes(hibernation.hiberfileBytes)}.`}
+            {t.hibernationState(hibernation.enabled)}
+            {hibernation.hiberfileBytes !== null && t.hiberfile(fmt.bytes(hibernation.hiberfileBytes))}
           </p>
-          <p>Turning hibernation off also disables Fast Startup and removes the hibernation file.</p>
+          <p>{t.offWarning}</p>
           <label>
             <input type="checkbox" checked={toggleHibernation} onChange={() => setToggleHibernation((value) => !value)} />
-            <span>Turn hibernation {hibernation.enabled ? "off" : "on"}</span>
+            <span>{t.toggleHibernation(!hibernation.enabled)}</span>
           </label>
-        </> : <p>Hibernation is not supported on this device (the firmware or Windows does not offer it), so it cannot be changed here.</p>}
+        </> : <p>{t.unsupported}</p>}
       </section>
       <fieldset>
-        <legend>Power plans</legend>
-        {status.schemes.length === 0 && <p>No power plans were reported.</p>}
+        <legend>{t.plansTitle}</legend>
+        {status.schemes.length === 0 && <p>{t.noPlans}</p>}
         {status.schemes.map((entry) => <label key={entry.id}>
           <input type="radio" name="power-scheme" value={entry.id} checked={checkedScheme === entry.id} onChange={() => setScheme(entry.id)} />
-          <span>{entry.name}{entry.active ? " (active)" : ""}</span>
+          <span>{entry.name}{entry.active ? t.active : ""}</span>
         </label>)}
       </fieldset>
     </>}

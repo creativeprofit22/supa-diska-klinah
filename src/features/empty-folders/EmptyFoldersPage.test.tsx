@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { EmptyFoldersPage } from "./EmptyFoldersPage";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import type { StorageStatus } from "../../shared/storage/types";
 const invoke=vi.hoisted(()=>vi.fn());
 vi.mock("@tauri-apps/api/core",()=>({invoke}));
@@ -48,4 +49,10 @@ it("invalid depth clears results and cannot start another scan",async()=>{
   expect(screen.getByRole("alert").textContent).toContain("0 to 64");
   expect(screen.queryByRole("checkbox")).toBeNull();
   expect(screen.getByRole<HTMLButtonElement>("button",{name:"Scan for empty folders"}).disabled).toBe(true);
+});
+it("renders Spanish copy inside an es-MX provider",()=>{
+  render(<I18nProvider languages={["es-MX"]}><EmptyFoldersPage/></I18nProvider>);
+  expect(screen.getByRole("heading",{name:"Carpetas vacías"})).toBeTruthy();
+  expect(screen.getByRole("button",{name:"Elegir carpeta"})).toBeTruthy();
+  expect(screen.getByLabelText("Profundidad de análisis")).toBeTruthy();
 });

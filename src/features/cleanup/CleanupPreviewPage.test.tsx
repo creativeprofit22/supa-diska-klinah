@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CleanupPreviewPage } from "./CleanupPreviewPage";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 
 vi.mock("../build-artifacts/BuildArtifactCoordinator", () => ({
   BuildArtifactCoordinator: () => <div>Build artifact budgets</div>,
@@ -430,5 +431,13 @@ describe("CleanupPreviewPage", () => {
     expect(alerts.some((alert) => alert.textContent?.includes("could not continue"))).toBe(true);
     expect(document.body.textContent).not.toContain("secret");
     expect(document.body.textContent).not.toContain("raw OS failure");
+  });
+
+  it("renders Spanish copy inside an es-MX provider", async () => {
+    mockBackend({ ...preview, records: [] }, projectDiscovery, []);
+    render(<I18nProvider languages={["es-MX"]}><CleanupPreviewPage /></I18nProvider>);
+    expect(screen.getByRole("heading", { name: "Limpieza" })).toBeTruthy();
+    expect(screen.getByLabelText("Agrega una ruta absoluta de proyecto")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "No se encontró nada" })).toBeTruthy();
   });
 });

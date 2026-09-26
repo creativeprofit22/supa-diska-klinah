@@ -1,32 +1,19 @@
 import { type ReactElement, useCallback, useEffect, useState } from "react";
+import { useStrings } from "../../shared/i18n/I18nProvider";
 import {
   getScanSettings,
   isScanProfile,
+  SCAN_PROFILES,
   type ScanProfile,
   setScanProfile,
 } from "./api/scanSettings";
-
-const PROFILE_OPTIONS: ReadonlyArray<{ value: ScanProfile; label: string; hint: string }> = [
-  {
-    value: "auto",
-    label: "Automatic (recommended)",
-    hint: "Checks each drive. Build-artifact discovery on solid-state drives searches more folders at once; hard drives and unknown drives keep the standard amount.",
-  },
-  {
-    value: "ssd",
-    label: "Solid-state drive",
-    hint: "Build-artifact discovery always searches more folders at once. Fastest on SSD and NVMe drives.",
-  },
-  {
-    value: "hdd",
-    label: "Hard drive",
-    hint: "Build-artifact discovery always searches the standard number of folders at once. Avoids extra disk seeking on spinning drives.",
-  },
-];
+import { settingsStrings } from "./strings";
 
 type Status = "loading" | "ready" | "saving" | "load-error";
 
 export function ScanSpeedSettings(): ReactElement {
+  const common = useStrings(settingsStrings);
+  const t = common.scanSpeed;
   const [status, setStatus] = useState<Status>("loading");
   const [profile, setProfile] = useState<ScanProfile>("auto");
   const [savedProfile, setSavedProfile] = useState<ScanProfile>("auto");
@@ -68,21 +55,18 @@ export function ScanSpeedSettings(): ReactElement {
   };
 
   const saving = status === "saving";
-  const hint = PROFILE_OPTIONS.find((option) => option.value === profile)?.hint;
+  const hint = t.hints[profile];
 
   return (
     <div className="settings-panel" aria-busy={status === "loading" || saving}>
-      <h2>Scan speed</h2>
-      <p>
-        Currently speeds up only build-artifact discovery in project cleanup. Other scans, such as Large files and
-        Disk analyzer, read one folder at a time, so this setting does not change them.
-      </p>
-      {status === "loading" && <p role="status">Loading scan settings…</p>}
+      <h2>{t.heading}</h2>
+      <p>{t.description}</p>
+      {status === "loading" && <p role="status">{t.loading}</p>}
       {status === "load-error" && (
         <div className="error-state" role="alert">
-          <p>Scan settings could not be loaded.</p>
+          <p>{t.loadError}</p>
           <button type="button" className="secondary-button" onClick={() => void load()}>
-            Try again
+            {common.tryAgain}
           </button>
         </div>
       )}
@@ -95,7 +79,7 @@ export function ScanSpeedSettings(): ReactElement {
         >
           <label className="settings-field">
             <span>
-              <strong>Drive type</strong>
+              <strong>{t.driveType}</strong>
               <small id="scan-profile-hint">{hint}</small>
             </span>
             <select
@@ -110,27 +94,27 @@ export function ScanSpeedSettings(): ReactElement {
                 setSaved(false);
               }}
             >
-              {PROFILE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
+              {SCAN_PROFILES.map((option) => (
+                <option key={option} value={option}>
+                  {t.profiles[option]}
                 </option>
               ))}
             </select>
           </label>
-          <p className="settings-note">Applies to the next build-artifact discovery you start.</p>
+          <p className="settings-note">{t.appliesNote}</p>
           {saveError && (
             <div className="error-state" role="alert">
-              <p>Scan settings could not be saved. Your change remains unsaved.</p>
+              <p>{t.saveError}</p>
             </div>
           )}
           {saved && (
             <p className="status-message" role="status">
-              Scan settings saved.
+              {t.saved}
             </p>
           )}
           <div className="button-row">
             <button type="submit" disabled={saving || profile === savedProfile}>
-              {saving ? "Saving…" : "Save scan settings"}
+              {saving ? common.saving : t.save}
             </button>
           </div>
         </form>

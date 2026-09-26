@@ -1,5 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useStrings } from "../i18n/I18nProvider";
 import { scanApi, storageError } from "./api";
+import { storageStrings } from "./strings";
 import { MAX_SELECTION, PAGE_SIZE, validId } from "./types";
 import type { PageCollection, ScanApi, ScanPhase, SnapshotInput, StorageModule, StoragePage, StorageSelection, StorageStatus } from "./types";
 
@@ -34,6 +36,10 @@ export function useStorageScan<Row>({ module, scopeKey, collection, parentId, ca
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const view = useRef({ collection, parentId });
   view.current = { collection, parentId };
+  // Read at failure time so a locale change never re-creates callbacks or reloads pages.
+  const t = useStrings(storageStrings);
+  const strings = useRef(t);
+  strings.current = t;
 
   const stopTimer = () => { if (timer.current !== null) clearTimeout(timer.current); timer.current = null; };
   const release = useCallback((input: SnapshotInput) => api.release(input).catch(() => {
@@ -69,7 +75,7 @@ export function useStorageScan<Row>({ module, scopeKey, collection, parentId, ca
       setState(s => ({ ...s, page: result, loadingPage: false }));
     } catch (error) {
       if (current === generation.current && pageVersion === pageGeneration.current) {
-        setState(s => ({ ...s, page: null, loadingPage: false, selected: new Set(), error: storageError(error) }));
+        setState(s => ({ ...s, page: null, loadingPage: false, selected: new Set(), error: storageError(error, strings.current.errors) }));
       }
     }
   }, [api]);
@@ -120,12 +126,12 @@ export function useStorageScan<Row>({ module, scopeKey, collection, parentId, ca
           if (current !== generation.current) return;
           job.current = null;
           void release(input);
-          setState(s => ({ ...s, phase: "failed", error: storageError(error), selected: new Set() }));
+          setState(s => ({ ...s, phase: "failed", error: storageError(error, strings.current.errors), selected: new Set() }));
         }
       };
       void poll();
     } catch (error) {
-      if (current === generation.current) setState(s => ({ ...s, phase: "failed", error: storageError(error) }));
+      if (current === generation.current) setState(s => ({ ...s, phase: "failed", error: storageError(error, strings.current.errors) }));
     }
   };
   const cancel = async () => {
@@ -141,7 +147,7 @@ export function useStorageScan<Row>({ module, scopeKey, collection, parentId, ca
       if (input) await api.cancel(input);
       if (current === generation.current) setState({ ...empty(), phase: "cancelled" });
     } catch {
-      if (current === generation.current) setState({ ...empty(), phase: "failed", error: "Cancellation could not be confirmed. Results were discarded; wait before starting again." });
+      if (current === generation.current) setState({ ...empty(), phase: "failed", error: strings.current.scan.cancellationUnconfirmed });
     } finally {
       if (input) await release(input);
     }

@@ -1,9 +1,15 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import type { CleanupExecutionSummary } from "./api";
 import { historyPage, type HistoryPage, type HistoryRequest } from "./history";
+import { useStrings } from "../i18n/I18nProvider";
+import { cleanupStrings } from "./strings";
 
 /** One live page, never an accumulated history or a stack of prior cursors. */
 export function useCleanupHistory(fetchPage: (input?: HistoryRequest) => Promise<HistoryPage<CleanupExecutionSummary>>) {
+  const t = useStrings(cleanupStrings);
+  // Read at failure time so a locale change never re-creates the loader.
+  const strings = useRef(t);
+  strings.current = t;
   const mounted = useRef(false);
   const generation = useRef(0);
   const [records, setRecords] = useState<CleanupExecutionSummary[]>([]);
@@ -25,7 +31,7 @@ export function useCleanupHistory(fetchPage: (input?: HistoryRequest) => Promise
       if (!mounted.current || request !== generation.current) return;
       setRecords(page.records); setCurrentCursor(cursor); setNextCursor(page.nextCursor); setLoaded(true);
     } catch {
-      if (mounted.current && request === generation.current) setError("History could not be loaded. Try loading history again.");
+      if (mounted.current && request === generation.current) setError(strings.current.historyLoadFailed);
     } finally {
       if (mounted.current && request === generation.current) setLoading(false);
     }

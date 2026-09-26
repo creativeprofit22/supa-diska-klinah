@@ -1,7 +1,7 @@
 import { uninstallerRoute } from "../features/uninstaller/route";
 import { browserRoute } from "../features/browser/route";
 import { cleanerRoute } from "../features/cleaner/route";
-import { createHashRouter } from "react-router-dom";
+import { createHashRouter, type RouteObject } from "react-router-dom";
 import { cleanupRoute } from "../features/cleanup/route";
 import { dashboardRoute } from "../features/dashboard/route";
 import { drivesRoute } from "../features/drives/route";
@@ -24,7 +24,7 @@ import { startupRoute } from "../features/startup/route";
 import { updatesRoute } from "../features/updates/route";
 import { AppShell } from "../shared/layout/AppShell";
 
-export const router = createHashRouter([
+export const appRoutes: RouteObject[] = [
   {
     path: "/",
     element: <AppShell />,
@@ -32,4 +32,6 @@ export const router = createHashRouter([
       optimizerRoute, startupRoute, servicesRoute, privacyRoute, firewallRoute, hostsRoute, powerRoute, driversRoute, restoreRoute, updatesRoute, schedulerRoute,
       protectionRoute, settingsRoute],
   },
-]);
+];
+
+export const router = createHashRouter(appRoutes);

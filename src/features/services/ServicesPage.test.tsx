@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanTicket, SystemChange } from "../../shared/system-change/types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { ServicesPage } from "./ServicesPage";
 import type { ServiceItem } from "./types";
 
@@ -78,4 +79,10 @@ it("disables not-installed and boot/system services with a reason", async () => 
   expect(select("Connected User Experiences").disabled).toBe(false);
   expect(screen.getByText(/Not installed on this PC/)).toBeTruthy();
   expect(screen.getByText(/boot or system driver start type/)).toBeTruthy();
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><ServicesPage /></I18nProvider>);
+  expect((await screen.findAllByRole("option", { name: "Mantener el actual" })).length).toBeGreaterThan(0);
+  expect(screen.getByRole("heading", { level: 1, name: "Servicios de Windows" })).toBeTruthy();
 });

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { systemChangeActions, systemChangeError, type SystemChangeActions } from "./api";
+import { useStrings } from "../i18n/I18nProvider";
+import { systemChangeStrings } from "./strings";
 import type { ExecutionReport, PlanTicket, SystemChange } from "./types";
 
 export type PlanPhase = "idle" | "planning" | "reviewing" | "applying" | "done";
@@ -14,6 +16,7 @@ export function useSystemChangePlan(actions: SystemChangeActions = systemChangeA
   const [ticket, setTicket] = useState<PlanTicket | null>(null);
   const [report, setReport] = useState<ExecutionReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const errors = useStrings(systemChangeStrings).errors;
   const mounted = useRef(true);
   const lock = useRef(false);
   useEffect(() => () => { mounted.current = false; }, []);
@@ -33,9 +36,9 @@ export function useSystemChangePlan(actions: SystemChangeActions = systemChangeA
       setTicket(next); setPhase("reviewing");
     } catch (reason) {
       if (!mounted.current) return;
-      setError(systemChangeError(reason)); setPhase("idle");
+      setError(systemChangeError(reason, errors)); setPhase("idle");
     }
-  }), [run]);
+  }), [errors, run]);
 
   const reviewChanges = useCallback((changes: SystemChange[]) => review(() => actions.createPlan(changes)), [actions, review]);
   const reviewRollback = useCallback((entryIds: string[]) => review(() => actions.createRollbackPlan(entryIds)), [actions, review]);
@@ -50,9 +53,9 @@ export function useSystemChangePlan(actions: SystemChangeActions = systemChangeA
       setReport(result); setTicket(null); setPhase("done");
     } catch (reason) {
       if (!mounted.current) return;
-      setError(systemChangeError(reason)); setTicket(null); setPhase("idle");
+      setError(systemChangeError(reason, errors)); setTicket(null); setPhase("idle");
     }
-  }), [actions, run, ticket]);
+  }), [actions, errors, run, ticket]);
 
   const discard = useCallback(() => {
     if (lock.current) return;

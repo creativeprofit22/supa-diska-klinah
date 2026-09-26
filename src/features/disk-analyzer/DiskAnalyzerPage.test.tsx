@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DiskAnalyzerPage } from "./DiskAnalyzerPage";
 import { startDiskAnalyzer } from "./api";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 
 const invoke = vi.hoisted(()=>vi.fn());
 vi.mock("@tauri-apps/api/core",()=>({invoke}));
@@ -108,4 +109,14 @@ it("releases late picker authorizations on unmount",async()=>{
   const {unmount}=render(<DiskAnalyzerPage/>);fireEvent.click(screen.getByRole("button",{name:"Choose folder"}));unmount();
   await act(async()=>resolve(choice));
   expect(invoke.mock.calls.some(([c,b])=>c === "release_storage_scan" && JSON.parse(new TextDecoder().decode(b)).snapshotId === choice.rootId)).toBe(true);
+});
+
+it("renders Spanish copy for es-MX",async()=>{
+  render(<I18nProvider languages={["es-MX"]}><DiskAnalyzerPage/></I18nProvider>);
+  expect(screen.getByRole("heading",{name:"Analizador de disco"})).toBeTruthy();
+  fireEvent.click(screen.getByRole("button",{name:"Elegir carpeta"}));
+  await waitFor(()=>expect(screen.getByRole<HTMLButtonElement>("button",{name:"Analizar carpeta"}).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button",{name:"Analizar carpeta"}));
+  const totals=await screen.findByRole("region",{name:"Totales de la raíz analizada"});
+  expect(totals.textContent).toContain("Asignación desconocida");
 });

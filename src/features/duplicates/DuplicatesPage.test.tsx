@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DuplicatesPage } from "./DuplicatesPage";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { parseFields } from "./api";
 import type { StorageStatus } from "../../shared/storage/types";
 const invoke = vi.hoisted(() => vi.fn());
@@ -51,4 +52,10 @@ it("bounds depth and minimum byte conversion", () => {
   for (const maximum of ["-1", "0", "Infinity", "0.0000001"]) expect(parseFields("2", "1", maximum)).toBeNull();
   for (const extensions of ["../txt", "a".repeat(33), Array.from({ length: 65 }, (_, i) => `ext${i}`).join(",")]) expect(parseFields("2", "0", "", extensions)).toBeNull();
   for (const [d, m] of [["65", "0"], ["-1", "0"], ["1", "-1"], ["1", "0.0000001"], ["", "0"]]) expect(parseFields(d, m)).toBeNull();
+});
+it("renders Spanish copy inside an es-MX provider",()=>{
+  render(<I18nProvider languages={["es-MX"]}><DuplicatesPage/></I18nProvider>);
+  expect(screen.getByRole("heading",{name:"Archivos duplicados"})).toBeTruthy();
+  expect(screen.getByLabelText("Tamaño mínimo (MiB)")).toBeTruthy();
+  expect(screen.getByRole("button",{name:"Buscar duplicados"})).toBeTruthy();
 });

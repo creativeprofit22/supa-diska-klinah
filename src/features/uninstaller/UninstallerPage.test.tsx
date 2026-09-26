@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { UninstallerPage } from "./UninstallerPage";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import type { VendorJob, VendorHistoryPage } from "./api";
 const invoke=vi.hoisted(()=>vi.fn());
 vi.mock("@tauri-apps/api/core",()=>({invoke}));
@@ -100,4 +101,12 @@ it("filter changes invalidate a prepared job without confirming it",async()=>{
  expect(screen.queryByRole("region",{name:"Immutable vendor job review"})).toBeNull();
  expect(document.activeElement).toBe(filter);
  expect(invoke.mock.calls.some(([name])=>name==="confirm_vendor_job")).toBe(false);
+});
+
+it("renders Spanish copy for es-MX",async()=>{
+ render(<I18nProvider languages={["es-MX"]}><UninstallerPage/></I18nProvider>);
+ expect(screen.getByRole("heading",{name:"Programas instalados"})).toBeTruthy();
+ fireEvent.click(screen.getByRole("button",{name:"Actualizar inventario"}));
+ expect(await screen.findByRole("button",{name:"Revisar la desinstalación del proveedor para Fixture vendor"})).toBeTruthy();
+ expect(screen.getByText(/Editor: Desconocido/)).toBeTruthy();
 });

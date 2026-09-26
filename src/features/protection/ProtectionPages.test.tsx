@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { BreachPage, PASSWORD_TOO_LONG } from "./BreachPage";
 import { evidenceKindLabel, summaryLine } from "./labels";
 import { OverviewPage } from "./OverviewPage";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { COLLISION_HELP, QuarantinePage } from "./QuarantinePage";
 import { RulesPage } from "./RulesPage";
 import { ScanPage } from "./ScanPage";
@@ -214,4 +215,13 @@ it.each([
   expect((await screen.findByRole("alert")).textContent).toBe("Passwords longer than 1024 bytes can't be checked.");
   expect(PASSWORD_TOO_LONG).toBe("Passwords longer than 1024 bytes can't be checked.");
   expect(callsTo("check_password_breach")).toHaveLength(0);
+});
+it("renders Spanish (es-419) overview and scan text when the language is Spanish", async () => {
+  inRouter(<I18nProvider languages={["es-MX"]}><OverviewPage /></I18nProvider>);
+  expect(await screen.findByRole("heading", { name: "Uso de red" })).toBeTruthy();
+  expect(screen.getByText(/Paquete base integrado: secuencia 1, 2 reglas/)).toBeTruthy();
+  cleanup();
+  inRouter(<I18nProvider languages={["es-MX"]}><ScanPage /></I18nProvider>);
+  expect(await screen.findByText(/3 archivos examinados con el paquete de reglas 1/)).toBeTruthy();
+  expect(screen.getAllByText("Coincidencia con regla firmada").length).toBeGreaterThan(0);
 });

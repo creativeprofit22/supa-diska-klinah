@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useFormat, useStrings } from "../../shared/i18n/I18nProvider";
 import { listProcesses } from "./api";
 import { EvidenceBadge, errorMessage, evidenceDetail, signerLabel } from "./labels";
+import { protectionStrings } from "./strings";
 import type { ProcessInventory } from "./types";
 
 export function ProcessesPage() {
+  const strings = useStrings(protectionStrings);
+  const t = strings.processes;
+  const fmt = useFormat();
   const [inventory, setInventory] = useState<ProcessInventory | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -15,11 +20,11 @@ export function ProcessesPage() {
       setInventory(await listProcesses());
       setError(null);
     } catch (reason) {
-      setError(errorMessage(reason, "The process list could not be read."));
+      setError(errorMessage(reason, t.loadFailed));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   const rows = useMemo(() => {
@@ -30,24 +35,24 @@ export function ProcessesPage() {
   }, [inventory, filter]);
 
   return <section aria-labelledby="processes-title">
-    <h2 id="processes-title">Running processes</h2>
-    <p>Read-only. This app never ends or changes processes; use Task Manager for that. Command lines are not read.</p>
+    <h2 id="processes-title">{t.title}</h2>
+    <p>{t.intro}</p>
     <div className="protection-actions">
-      <button type="button" disabled={loading} onClick={() => void refresh()}>Refresh</button>
-      <label>Filter <input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
+      <button type="button" disabled={loading} onClick={() => void refresh()}>{t.refresh}</button>
+      <label>{t.filter} <input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
     </div>
-    {loading && <p role="status">Reading processes…</p>}
+    {loading && <p role="status">{t.loading}</p>}
     {error && <p role="alert">{error}</p>}
     {inventory && <>
-      <p>{inventory.processes.length} processes{inventory.imageUnavailableCount > 0 ? ` · ${inventory.imageUnavailableCount} could not be inspected (usually system or other users' processes)` : ""}{inventory.truncated ? " · list truncated" : ""}</p>
+      <p>{t.count(fmt.number(inventory.processes.length))}{inventory.imageUnavailableCount > 0 ? t.imageUnavailable(fmt.number(inventory.imageUnavailableCount)) : ""}{inventory.truncated ? t.truncated : ""}</p>
       <table className="protection-table">
-        <thead><tr><th scope="col">Name</th><th scope="col">PID</th><th scope="col">Parent</th><th scope="col">Signature</th><th scope="col">Findings</th></tr></thead>
+        <thead><tr><th scope="col">{t.columns.name}</th><th scope="col">{t.columns.pid}</th><th scope="col">{t.columns.parent}</th><th scope="col">{t.columns.signature}</th><th scope="col">{t.columns.findings}</th></tr></thead>
         <tbody>{rows.map((process) => <tr key={process.pid}>
           <th scope="row">{process.name}{process.imagePath && <><br /><code>{process.imagePath}</code></>}</th>
           <td>{process.pid}</td>
           <td>{process.parentPid}</td>
-          <td>{signerLabel(process.signer)}</td>
-          <td>{process.findings.length === 0 ? "None" : <ul>{process.findings.map((finding, index) => <li key={index}><EvidenceBadge evidence={finding} /> {evidenceDetail(finding)}</li>)}</ul>}</td>
+          <td>{signerLabel(process.signer, strings)}</td>
+          <td>{process.findings.length === 0 ? t.none : <ul>{process.findings.map((finding, index) => <li key={index}><EvidenceBadge evidence={finding} /> {evidenceDetail(finding, strings)}</li>)}</ul>}</td>
         </tr>)}</tbody>
       </table>
     </>}

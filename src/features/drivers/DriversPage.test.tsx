@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanTicket, SystemChange } from "../../shared/system-change/types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { DriversPage } from "./DriversPage";
 import type { DriverPackage } from "./types";
 
@@ -97,4 +98,10 @@ it("re-checks the restore point by default after the selection is emptied and ma
   fireEvent.click(box);
   expect(restore().checked).toBe(true);
   expect(screen.getByRole("button", { name: "Review selected changes (2)" })).toBeTruthy();
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><DriversPage /></I18nProvider>);
+  expect(await screen.findByRole("checkbox", { name: "Crear primero un punto de restauración" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "Paquetes de controladores" })).toBeTruthy();
 });

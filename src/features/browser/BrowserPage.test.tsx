@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { BrowserPage, cacheLabel } from "./BrowserPage";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -82,4 +83,10 @@ it("labels normalized profile/shared paths only for display and leaves unknown p
   expect(cacheLabel("C:/Fixture/ShaderCache/file", "c:/fixture", policy)).toBe("Shared cache");
   expect(cacheLabel("C:/Fixture/odd/file", "c:/fixture", policy)).toBe("Unclassified cache");
   expect(cacheLabel("C:/Fixture-other/ShaderCache/file", "c:/fixture", policy)).toBe("Unclassified cache");
+});
+it("renders Spanish (es-419) text when the language is Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><BrowserPage /></I18nProvider>);
+  expect(screen.getByRole("heading", { name: "Cachés del navegador" })).toBeTruthy();
+  await screen.findByRole("radio", { name: /Scope 1/ });
+  expect(screen.getByRole("button", { name: "Actualizar alcances nativos" })).toBeTruthy();
 });

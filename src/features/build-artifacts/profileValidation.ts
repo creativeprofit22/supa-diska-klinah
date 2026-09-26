@@ -1,5 +1,7 @@
 // Mirrors src-tauri/crates/windows-platform/src/cleanup/storage.rs.
 // profileValidation.test.ts checks constant parity; Rust remains authoritative.
+import { buildArtifactsStrings, type BuildArtifactValidationStrings } from "./strings";
+
 export const MAX_PROFILE_ARGUMENTS = 64;
 export const MAX_PROFILE_ARTIFACTS = 16;
 export const MAX_ARGUMENT_BYTES = 4096;
@@ -8,13 +10,18 @@ export const MAX_PROJECT_PATH_BYTES = 4096;
 
 const encoder = new TextEncoder();
 
-export function textError(value: string, maximum: number, label = false): string | undefined {
-  if (encoder.encode(value).length > maximum) return `Use at most ${maximum} UTF-8 bytes.`;
-  if (label && !value) return "Enter a label.";
+export function textError(
+  value: string,
+  maximum: number,
+  label = false,
+  t: BuildArtifactValidationStrings = buildArtifactsStrings.en.validation,
+): string | undefined {
+  if (encoder.encode(value).length > maximum) return t.tooManyBytes(maximum);
+  if (label && !value) return t.enterLabel;
   if ([...value].some((character) => {
     const code = character.codePointAt(0)!;
     return label ? code <= 31 || (code >= 127 && code <= 159) : code === 0;
-  })) return label ? "Control characters are not allowed." : "Null characters are not allowed.";
+  })) return label ? t.controlCharacters : t.nullCharacters;
 }
 
 // Windows Path components: separators collapse, internal '.' is ignored,
@@ -27,15 +34,18 @@ function normalizedArtifactPath(value: string): string | undefined {
   return parts.filter((part) => part !== ".").join("/").replace(/[A-Z]/g, (letter) => letter.toLowerCase()) || undefined;
 }
 
-export function artifactPathErrors(paths: string[]): (string | undefined)[] {
+export function artifactPathErrors(
+  paths: string[],
+  t: BuildArtifactValidationStrings = buildArtifactsStrings.en.validation,
+): (string | undefined)[] {
   const normalized = paths.map(normalizedArtifactPath);
   return normalized.map((path, index) => {
-    const byteError = textError(paths[index], MAX_PROJECT_PATH_BYTES);
+    const byteError = textError(paths[index], MAX_PROJECT_PATH_BYTES, false, t);
     if (byteError) return byteError;
-    if (!path) return "Enter a relative path without a root, drive prefix, or parent components.";
+    if (!path) return t.invalidRelativePath;
     if (normalized.some((other, otherIndex) => otherIndex !== index && other &&
       (path === other || path.startsWith(`${other}/`) || other.startsWith(`${path}/`)))) {
-      return "Artifact paths must not duplicate or overlap another path.";
+      return t.overlappingPath;
     }
   });
 }

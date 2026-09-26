@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { driveInventoryError, listDriveInventory, type DriveInventory } from "./api";
+import { listDriveInventory, type DriveInventory } from "./api";
 
+/** Errors keep the raw reason; the page maps it to text in the active language. */
 type InventoryState =
   | { kind: "loading" }
-  | { kind: "error"; message: string }
+  | { kind: "error"; reason: unknown }
   | { kind: "ready"; inventory: DriveInventory };
 
 export function useDriveInventory() {
@@ -19,7 +20,7 @@ export function useDriveInventory() {
     listDriveInventory().then(
       (inventory) => { if (active) setState({ kind: "ready", inventory }); },
       (reason: unknown) => {
-        if (active) setState({ kind: "error", message: driveInventoryError(reason) });
+        if (active) setState({ kind: "error", reason });
       },
     );
     return () => { active = false; };

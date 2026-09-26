@@ -1,35 +1,38 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
+import { useStrings } from "../../shared/i18n/I18nProvider";
 import { useFoundationStatus } from "./model/useFoundationStatus";
+import { dashboardStrings } from "./strings";
 
 export function DashboardPage() {
+  const t = useStrings(dashboardStrings);
   const { status, error, loading, retry } = useFoundationStatus();
 
   useEffect(() => {
-    document.title = "Dashboard | Supa Diska Klinah";
-  }, []);
+    document.title = t.documentTitle;
+  }, [t]);
 
   return (
     <section aria-labelledby="dashboard-heading">
       <header className="page-header">
-        <p className="kicker">Foundation</p>
-        <h1 id="dashboard-heading">System readiness</h1>
-        <p>Confirm the native Windows adapter before cleanup features arrive.</p>
+        <p className="kicker">{t.kicker}</p>
+        <h1 id="dashboard-heading">{t.heading}</h1>
+        <p>{t.intro}</p>
       </header>
 
       <div className="status-panel">
         {loading && (
           <p className="status-message" role="status">
-            Checking the native adapter…
+            {t.checking}
           </p>
         )}
 
         {error && (
           <div className="error-state" role="alert">
-            <h2>Could not reach the native adapter</h2>
+            <h2>{t.unreachable}</h2>
             <p>{error}</p>
             <button type="button" onClick={retry}>
-              Try again
+              {t.tryAgain}
             </button>
           </div>
         )}
@@ -37,35 +40,32 @@ export function DashboardPage() {
         {status && (
           <>
             <div className="readiness-heading">
-              <h2>Adapter status</h2>
-              <strong>{status.adapterReady ? "Ready" : "Unavailable"}</strong>
+              <h2>{t.adapterStatus}</h2>
+              <strong>{status.adapterReady ? t.ready : t.unavailable}</strong>
             </div>
             <dl className="status-list">
               <div>
-                <dt>Platform</dt>
+                <dt>{t.platform}</dt>
                 <dd>{status.platform}</dd>
               </div>
               <div>
-                <dt>Architecture</dt>
+                <dt>{t.architecture}</dt>
                 <dd>{status.architecture}</dd>
               </div>
               <div>
-                <dt>Native adapter</dt>
-                <dd>{status.adapterReady ? "Connected" : "Not connected"}</dd>
+                <dt>{t.nativeAdapter}</dt>
+                <dd>{status.adapterReady ? t.connected : t.notConnected}</dd>
               </div>
             </dl>
           </>
         )}
       </div>
 
-      <div className="restore-point-panel" aria-labelledby="restore-point-heading">
-        <h2 id="restore-point-heading">System restore point</h2>
-        <p>
-          Save Windows system settings before future cleanup actions. This is not
-          a file backup.
-        </p>
-        <Link to="/restore-points">Create or view restore points</Link>
-      </div>
+      <section className="restore-point-panel" aria-labelledby="restore-point-heading">
+        <h2 id="restore-point-heading">{t.restorePointHeading}</h2>
+        <p>{t.restorePointBody}</p>
+        <Link to="/restore-points">{t.restorePointLink}</Link>
+      </section>
     </section>
   );
 }

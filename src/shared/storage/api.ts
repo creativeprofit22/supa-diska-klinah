@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { CleanupDisposition, CleanupPlanSummary } from "../cleanup/api";
 import type { NativeScope, PageRequest, RootChoice, ScanApi, SnapshotInput, StorageModule, StoragePage, StorageSelection, StorageStatus } from "./types";
 import { MAX_SELECTION, validId } from "./types";
+import { storageStrings, type StorageStrings } from "./strings";
 
 // Matches step 1's Raw-body boundary. Never send ordinary invoke argument objects.
 function request<T>(command: string, input: object): Promise<T> {
@@ -69,16 +70,16 @@ export function createStoragePlan(selection: StorageSelection, disposition: Clea
 export function scanApi<Row>(): ScanApi<Row> {
   return { status: storageStatus, page: storagePage<Row>, cancel: cancelStorageScan, release: releaseStorageScan };
 }
-export function storageError(error: unknown): string {
+export function storageError(error: unknown, t: StorageStrings["errors"] = storageStrings.en.errors): string {
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
   switch (code) {
-    case "busy": return "Another scan is active. Cancel it or wait before starting again.";
-    case "snapshot_unavailable": return "These results expired or were released. Start a new scan.";
-    case "scope_unavailable": return "This scope is unavailable. Choose another supported scope.";
-    case "invalid_cursor": return "This page is no longer available. Return to the first page or scan again.";
-    case "limit_reached": return "The safety limit was reached. Narrow the scope or select fewer items.";
-    case "recovery_volume_unsupported": return "App recovery is unavailable for the selected volume. No recovery plan was created.";
-    case "invalid_evidence": return "The selection no longer matches the scan. Scan again before reviewing.";
-    default: return "Storage could not continue. Start a new scan before retrying.";
+    case "busy": return t.busy;
+    case "snapshot_unavailable": return t.snapshot_unavailable;
+    case "scope_unavailable": return t.scope_unavailable;
+    case "invalid_cursor": return t.invalid_cursor;
+    case "limit_reached": return t.limit_reached;
+    case "recovery_volume_unsupported": return t.recovery_volume_unsupported;
+    case "invalid_evidence": return t.invalid_evidence;
+    default: return t.fallback;
   }
 }

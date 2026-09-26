@@ -1,11 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { useStrings } from "../../shared/i18n/I18nProvider";
 import { checkPasswordBreach, getOverview } from "./api";
 import { EvidenceBadge, errorMessage } from "./labels";
+import { protectionStrings } from "./strings";
 import { MAX_PASSWORD_BYTES, type PasswordBreachResult } from "./types";
 
-export const PASSWORD_TOO_LONG = `Passwords longer than ${MAX_PASSWORD_BYTES} bytes can't be checked.`;
+/** English message; the page shows the active locale's `breach.tooLong`. */
+export const PASSWORD_TOO_LONG = protectionStrings.en.breach.tooLong(String(MAX_PASSWORD_BYTES));
 
 export function BreachPage() {
+  const t = useStrings(protectionStrings).breach;
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
   const [result, setResult] = useState<PasswordBreachResult | null>(null);
@@ -22,7 +26,7 @@ export function BreachPage() {
     // maxLength counts UTF-16 units, so multi-byte input can still exceed the backend's byte limit.
     if (new TextEncoder().encode(password).length > MAX_PASSWORD_BYTES) {
       setResult(null);
-      setError(PASSWORD_TOO_LONG);
+      setError(t.tooLong(String(MAX_PASSWORD_BYTES)));
       return;
     }
     setChecking(true);
@@ -33,22 +37,22 @@ export function BreachPage() {
     try {
       setResult(await checkPasswordBreach(value));
     } catch (reason) {
-      setError(errorMessage(reason, "The check could not be completed. Nothing about the result is known."));
+      setError(errorMessage(reason, t.failed));
     } finally {
       setChecking(false);
     }
   };
 
   return <section aria-labelledby="breach-title">
-    <h2 id="breach-title">Password breach check</h2>
-    <p>Checks whether a password appears in the public Pwned Passwords list. Only the first 5 characters of its SHA-1 hash are sent; the match happens on this PC. The password is not stored.</p>
-    <p className="protection-hint">E-mail breach monitoring is not offered because it would send your address to a third party.</p>
-    {enabled === false && <p role="note">This check is off. Turn on "Allow the password breach check" in Overview to use it.</p>}
+    <h2 id="breach-title">{t.title}</h2>
+    <p>{t.intro}</p>
+    <p className="protection-hint">{t.emailNote}</p>
+    {enabled === false && <p role="note">{t.off}</p>}
     <form onSubmit={(event) => void submit(event)}>
-      <label>Password <input type="password" autoComplete="off" maxLength={MAX_PASSWORD_BYTES} value={password} disabled={!enabled || checking} onChange={(event) => setPassword(event.target.value)} /></label>
-      <button type="submit" disabled={!enabled || checking || !password}>Check</button>
+      <label>{t.password} <input type="password" autoComplete="off" maxLength={MAX_PASSWORD_BYTES} value={password} disabled={!enabled || checking} onChange={(event) => setPassword(event.target.value)} /></label>
+      <button type="submit" disabled={!enabled || checking || !password}>{t.check}</button>
     </form>
-    {checking && <p role="status">Checking…</p>}
+    {checking && <p role="status">{t.checking}</p>}
     {error && <p role="alert">{error}</p>}
     {result && <p role="status"><EvidenceBadge evidence={result.evidence} /> {result.evidence.kind === "external" ? result.evidence.detail : ""}</p>}
   </section>;

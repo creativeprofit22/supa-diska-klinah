@@ -1,18 +1,11 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { MAX_PLAN_CHANGES, systemChangeActions, systemChangeError, type SystemChangeActions } from "./api";
-import { outcomeLabel, reversibilityLabel } from "./labels";
-import type { ExecutionReport, JournalView, RollbackStatus, SystemChange } from "./types";
+import { useFormat } from "../i18n/I18nProvider";
+import { useSystemChangeLabels } from "./labels";
+import type { ExecutionReport, JournalView, SystemChange } from "./types";
 import { ExecutionResults, PlannedChangeList } from "./SystemChangeReview";
 import { useSystemChangePlan } from "./useSystemChangePlan";
 import "./system-change.css";
-
-const rollbackLabel: Record<RollbackStatus, string> = {
-  available: "Can be undone",
-  alreadyRolledBack: "Already undone",
-  irreversible: "Cannot be undone",
-  interrupted: "Interrupted; check the setting manually",
-  nothingApplied: "Nothing to undo",
-};
 
 /** Change history for one module (or all), with explicit per-entry undo. */
 export function SystemChangeJournal({ module, describe, actions = systemChangeActions, refreshKey = 0, onFinished }: {
@@ -26,6 +19,9 @@ export function SystemChangeJournal({ module, describe, actions = systemChangeAc
   const [entries, setEntries] = useState<JournalView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  const labels = useSystemChangeLabels();
+  const { t } = labels;
+  const fmt = useFormat();
   const plan = useSystemChangePlan(actions);
   const headingId = useId();
   const load = useCallback(async () => {
@@ -33,8 +29,8 @@ export function SystemChangeJournal({ module, describe, actions = systemChangeAc
       const all = await actions.journal();
       setEntries(all.filter((view) => !module || kindModule(view.entry.change) === module));
       setError(null);
-    } catch (reason) { setError(systemChangeError(reason)); }
-  }, [actions, module]);
+    } catch (reason) { setError(systemChangeError(reason, t.errors)); }
+  }, [actions, module, t.errors]);
   useEffect(() => { void load(); }, [load, refreshKey, plan.report]);
   const handledReport = useRef<ExecutionReport | null>(null);
   useEffect(() => {
@@ -44,23 +40,23 @@ export function SystemChangeJournal({ module, describe, actions = systemChangeAc
   }, [onFinished, plan.phase, plan.report]);
   const toggle = (id: string) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id].slice(0, MAX_PLAN_CHANGES));
   return <section className="system-change-journal" aria-labelledby={headingId}>
-    <h2 id={headingId}>Change history</h2>
+    <h2 id={headingId}>{t.historyTitle}</h2>
     {error && <p role="alert">{error}</p>}
-    {entries?.length === 0 && <p>No changes recorded yet.</p>}
+    {entries?.length === 0 && <p>{t.historyEmpty}</p>}
     {!!entries?.length && <ul>{entries.map(({ entry, rollback }) => <li key={entry.id}>
       <label>
         <input type="checkbox" disabled={rollback !== "available" || plan.phase !== "idle"} checked={selected.includes(entry.id)} onChange={() => toggle(entry.id)} />
         <span>{describe(entry.change)}</span>
       </label>
-      <p className="system-change-meta">{new Date(entry.recordedAt * 1000).toLocaleString()} · {outcomeLabel(entry.outcome)} · {reversibilityLabel(entry.reversibility)} · {rollbackLabel[rollback]}</p>
+      <p className="system-change-meta">{fmt.dateTime(entry.recordedAt)} · {labels.outcome(entry.outcome)} · {labels.reversibility(entry.reversibility)} · {t.rollback[rollback]}</p>
     </li>)}</ul>}
-    <button type="button" disabled={selected.length === 0 || plan.phase !== "idle"} onClick={() => { void plan.reviewRollback(selected); setSelected([]); }}>Review undo ({selected.length})</button>
+    <button type="button" disabled={selected.length === 0 || plan.phase !== "idle"} onClick={() => { void plan.reviewRollback(selected); setSelected([]); }}>{t.reviewUndo(selected.length)}</button>
     {plan.error && <p role="alert">{plan.error}</p>}
     {plan.ticket && <>
-      <p>Undo restores the state recorded before each change. Windows will ask you to confirm.</p>
+      <p>{t.undoIntro}</p>
       <PlannedChangeList ticket={plan.ticket} />
-      <button type="button" onClick={() => void plan.apply()}>Continue to Windows confirmation</button>
-      <button type="button" onClick={plan.discard}>Discard review</button>
+      <button type="button" onClick={() => void plan.apply()}>{t.continueToWindows}</button>
+      <button type="button" onClick={plan.discard}>{t.discardReview}</button>
     </>}
     {plan.report && <ExecutionResults report={plan.report} describe={describe} />}
   </section>;

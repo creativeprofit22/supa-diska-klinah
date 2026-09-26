@@ -7,6 +7,7 @@ import { AppShell } from "../../shared/layout/AppShell";
 import { type DriveInventory } from "./api";
 import { DriveInventoryPage } from "./DriveInventoryPage";
 import { drivesRoute } from "./route";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -154,4 +155,13 @@ it("is reachable through the actual shell navigation and route", async () => {
   expect(screen.getByRole("link", { name: "Drives" }).getAttribute("aria-current")).toBe("page");
   expect(document.title).toBe("Drives | Supa Diska Klinah");
   expect(invoke).toHaveBeenCalledExactlyOnceWith("list_drive_inventory");
+});
+
+it("renders Spanish copy and locale-formatted sizes for es-MX", async () => {
+  invoke.mockResolvedValue(populated);
+  render(<I18nProvider languages={["es-MX"]}><DriveInventoryPage /></I18nProvider>);
+  expect(screen.getByRole("heading", { name: "Unidades fijas" })).toBeTruthy();
+  expect(await screen.findByText("1 unidad fija encontrada.")).toBeTruthy();
+  expect(screen.getByText("Unidad del sistema")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Actualizar unidades" })).toBeTruthy();
 });

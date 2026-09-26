@@ -17,6 +17,8 @@ import {
   type BuildRun,
   type RegisterBuildProfileInput,
 } from "./api";
+import { useStrings } from "../../shared/i18n/I18nProvider";
+import { buildArtifactsStrings, type BuildArtifactsStrings } from "./strings";
 
 const TERMINAL = new Set<BuildRun["state"]>([
   "succeeded",
@@ -25,12 +27,17 @@ const TERMINAL = new Set<BuildRun["state"]>([
   "analysisFailed",
 ]);
 
-function message(error: unknown): string {
-  if (error instanceof Error || isBuildArtifactCommandError(error)) return error.message;
-  return "The build artifact operation could not be completed.";
+function message(error: unknown, t: BuildArtifactsStrings): string {
+  // Backend errors carry a typed code; the UI owns the wording so it can be translated.
+  if (isBuildArtifactCommandError(error) && Object.hasOwn(t.errors, error.code)) {
+    return t.errors[error.code as keyof BuildArtifactsStrings["errors"]];
+  }
+  if (error instanceof Error) return error.message;
+  return t.operationFailed;
 }
 
 export function useBuildArtifacts() {
+  const t = useStrings(buildArtifactsStrings);
   const [profiles, setProfiles] = useState<BuildProfile[]>([]);
   const [policy, setPolicy] = useState<ArtifactBudgetPolicy | null>(null);
   const [preview, setPreview] = useState<ArtifactBudgetPreview | null>(null);
@@ -62,9 +69,9 @@ export function useBuildArtifacts() {
     const failure = [profilesResult, policyResult, previewResult, activeRunResult].find(
       (result) => result.status === "rejected",
     );
-    if (failure?.status === "rejected") setError(message(failure.reason));
+    if (failure?.status === "rejected") setError(message(failure.reason, t));
     setLoading(false);
-  }, []);
+  }, [t]);
 
   const reload = useCallback(() => load(false), [load]);
 
@@ -86,14 +93,14 @@ export function useBuildArtifacts() {
           if (TERMINAL.has(next.state)) void reload();
         })
         .catch((failure: unknown) => {
-          if (!cancelled) setError(message(failure));
+          if (!cancelled) setError(message(failure, t));
         });
     }, 500);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [reload, run]);
+  }, [reload, run, t]);
 
   const perform = useCallback(async <T,>(key: string, operation: () => Promise<T>) => {
     setPending(key);
@@ -101,12 +108,12 @@ export function useBuildArtifacts() {
     try {
       return await operation();
     } catch (failure) {
-      setError(message(failure));
+      setError(message(failure, t));
       return null;
     } finally {
       setPending(null);
     }
-  }, []);
+  }, [t]);
 
   const register = useCallback(
     async (input: RegisterBuildProfileInput) => {
@@ -151,11 +158,11 @@ export function useBuildArtifacts() {
       if (saved?.policySaved) setPolicy(saved.policy);
       await load(true);
       if (saved?.analysisStatus === "failed") {
-        setError("Artifact budgets were saved, but immediate analysis failed. The saved policy remains active.");
+        setError(t.analysisFailedAfterSave);
       }
       return saved;
     },
-    [load, perform],
+    [load, perform, t],
   );
 
   return {

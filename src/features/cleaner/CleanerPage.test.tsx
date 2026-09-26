@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { CleanerPage } from "./CleanerPage";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -63,4 +64,10 @@ it("category changes release unused authority and clear scope", async () => {
   expect(screen.queryByRole("button", { name: "Scan cleaner scope" })).toBeNull();
   expect(calls("release_storage_scan")).toContainEqual({ module: "cleaner", snapshotId: id(11) });
   expect(screen.getAllByRole<HTMLInputElement>("radio").every(r => !r.checked)).toBe(true);
+});
+it("renders Spanish (es-419) text when the language is Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><CleanerPage /></I18nProvider>);
+  expect(screen.getByRole("heading", { name: "Limpiador por reglas" })).toBeTruthy();
+  await screen.findByRole("radio", { name: /Scope 1/ });
+  expect(screen.getByText("Reglas del catálogo, procedencia y exclusiones")).toBeTruthy();
 });

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { type UninstallerStrings, uninstallerStrings } from "./strings";
 import { historyPage, historyRequest, type HistoryPage, type HistoryRequest } from "../../shared/cleanup/history";
 export type VendorHistoryRequest = HistoryRequest;
 export type VendorHistoryPage = HistoryPage<VendorJob>;
@@ -28,25 +29,14 @@ export async function vendorJobHistory(input: VendorHistoryRequest = {}): Promis
   return historyPage<VendorJob>(await request<unknown>("vendor_job_history", dto), "vendor", dto.limit);
 }
 export const pending = (job: VendorJob) => job.state === "queued" || job.state === "launching";
-export const outcome: Record<VendorJobState, string> = {
-  awaitingConfirmation: "Awaiting separate Windows confirmation. Nothing has launched.",
-  queued: "Queued for vendor launch. Vendor UI or UAC may appear.",
-  launching: "Waiting for the vendor launcher. Navigating away does not stop the installer.",
-  completed: "Launcher exited successfully. This is not proof that the program was removed.",
-  cancelledByVendorOrUAC: "Vendor or UAC declined/cancelled. Removal is not confirmed.",
-  cancelledBeforeLaunch: "Cancelled before launch. No vendor installer was started by this job.",
-  failed: "Vendor launch or operation failed. Removal is not confirmed.",
-  rebootRequired: "Vendor reported a reboot is required. Removal is not yet confirmed.",
-  outcomeUnknown: "Outcome unknown: timeout, interrupted waiting, or an unverified vendor exit. The installer may still be running; it was not terminated.",
-};
-export function vendorError(error: unknown): string {
+export function vendorError(error: unknown, t: UninstallerStrings["errors"] = uninstallerStrings.en.errors): string {
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : "";
   switch (code) {
-    case "history_count_capacity": return "Retained vendor history has reached its 1,000-outcome capacity. New jobs are stopped until a future journal migration. You can still inspect retained history.";
-    case "history_size_capacity": return "Retained vendor history has reached its storage capacity (8 MiB safeguard). New jobs are stopped until a future journal migration. You can still inspect retained history.";
-    case "busy": return "Another operation or an unresolved vendor job is active.";
-    case "expired": case "registry_changed": case "executable_changed": return "Program evidence expired or changed. Refresh inventory and review again.";
-    case "unsupported_command": return "This vendor command is not supported. Use Windows installed-app settings.";
-    default: return "The vendor request could not be confirmed. Check retained history before trying again.";
+    case "history_count_capacity": return t.historyCountCapacity;
+    case "history_size_capacity": return t.historySizeCapacity;
+    case "busy": return t.busy;
+    case "expired": case "registry_changed": case "executable_changed": return t.expired;
+    case "unsupported_command": return t.unsupported;
+    default: return t.unknown;
   }
 }

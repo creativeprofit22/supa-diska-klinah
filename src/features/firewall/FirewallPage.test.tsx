@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanTicket, SystemChange } from "../../shared/system-change/types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { FirewallPage } from "./FirewallPage";
 import type { FirewallRule, FirewallStatus } from "./types";
 
@@ -113,4 +114,10 @@ it("the filter limits rule rows to the first 200 matches", async () => {
   review();
   await screen.findByRole("button", { name: "Continue to Windows confirmation" });
   expect(planned()).toEqual([[{ kind: "setFirewallRuleEnabled", ruleName: "Old Game", enabled: true }]]);
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><FirewallPage /></I18nProvider>);
+  expect(await screen.findByRole("heading", { name: "Perfiles" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Reglas" })).toBeTruthy();
 });

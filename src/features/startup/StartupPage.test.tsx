@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanTicket, SystemChange } from "../../shared/system-change/types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { StartupPage } from "./StartupPage";
 import type { StartupItem } from "./types";
 
@@ -100,4 +101,10 @@ it("reloads the startup inventory after an undo from Change history completes", 
   await waitFor(() => expect(calls("execute_system_change_plan")).toHaveLength(1));
   expect(JSON.parse(new TextDecoder().decode(calls("create_system_rollback_plan")[0][1] as Uint8Array))).toEqual({ entryIds: [entryId] });
   await waitFor(() => expect(calls("list_startup_items")).toHaveLength(2));
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><StartupPage /></I18nProvider>);
+  expect(await screen.findByRole("checkbox", { name: "Cambiar Chat a deshabilitado" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "Aplicaciones de inicio" })).toBeTruthy();
 });

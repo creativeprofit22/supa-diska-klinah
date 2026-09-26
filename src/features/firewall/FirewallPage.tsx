@@ -1,20 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SystemChangeJournal } from "../../shared/system-change/SystemChangeJournal";
 import { SystemChangeReview } from "../../shared/system-change/SystemChangeReview";
-import { riskLabel } from "../../shared/system-change/labels";
+import { useFormat, useStrings } from "../../shared/i18n/I18nProvider";
+import { useSystemChangeLabels } from "../../shared/system-change/labels";
 import type { SystemChange } from "../../shared/system-change/types";
 import { getFirewallStatus } from "./api";
-import type { FirewallAction, FirewallProfile, FirewallRule, FirewallStatus } from "./types";
+import { firewallStrings, type FirewallStrings } from "./strings";
+import type { FirewallProfile, FirewallRule, FirewallStatus } from "./types";
 
 export const MAX_VISIBLE_RULES = 200;
 
-const profileLabel: Record<FirewallProfile, string> = { domain: "Domain", private: "Private", public: "Public" };
-const actionLabel: Record<FirewallAction, string> = { allow: "Allow", block: "Block", unknown: "Unknown" };
-
-export function describe(change: SystemChange): string {
+export function describe(change: SystemChange, t: FirewallStrings = firewallStrings.en): string {
   switch (change.kind) {
-    case "setFirewallRuleEnabled": return `${change.enabled ? "Turn on" : "Turn off"} firewall rule: ${change.ruleName}`;
-    case "setFirewallProfileEnabled": return `${change.enabled ? "Turn on" : "Turn off"} ${profileLabel[change.profile]} firewall profile`;
+    case "setFirewallRuleEnabled": return t.describeRule(change.enabled, change.ruleName);
+    case "setFirewallProfileEnabled": return t.describeProfile(change.enabled, t.profile[change.profile]);
     default: return change.kind;
   }
 }
@@ -22,14 +21,14 @@ export function describe(change: SystemChange): string {
 const ruleKey = (name: string) => `rule:${name}`;
 const profileKey = (profile: FirewallProfile) => `profile:${profile}`;
 
-function loadError(reason: unknown): string {
+function loadError(reason: unknown, t: FirewallStrings): string {
   const message = (reason as { message?: unknown } | null)?.message;
-  return typeof message === "string" && message.length <= 300 ? message : "The firewall status could not be read.";
+  return typeof message === "string" && message.length <= 300 ? message : t.loadError;
 }
 
-function profileNames(mask: number): string {
-  const names = (["domain", "private", "public"] as const).filter((_, bit) => (mask & (1 << bit)) !== 0).map((profile) => profileLabel[profile]);
-  return names.length === 3 || mask === 0x7fffffff ? "All" : names.join(", ") || "None";
+function profileNames(mask: number, t: FirewallStrings): string {
+  const names = (["domain", "private", "public"] as const).filter((_, bit) => (mask & (1 << bit)) !== 0).map((profile) => t.profile[profile]);
+  return names.length === 3 || mask === 0x7fffffff ? t.all : names.join(", ") || t.none;
 }
 
 function matches(rule: FirewallRule, filter: string): boolean {
@@ -40,6 +39,10 @@ function matches(rule: FirewallRule, filter: string): boolean {
 
 /** Windows Firewall profiles, audit findings and rules, with explicit per-item changes. */
 export function FirewallPage() {
+  const sc = useSystemChangeLabels();
+  const t = useStrings(firewallStrings);
+  const fmt = useFormat();
+  const describeChange = useCallback((change: SystemChange) => describe(change, t), [t]);
   const [status, setStatus] = useState<FirewallStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,11 +58,11 @@ export function FirewallPage() {
       setSelected(new Map());
       setError(null);
     } catch (reason) {
-      setError(loadError(reason));
+      setError(loadError(reason, t));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   const toggle = (key: string, change: SystemChange) => setSelected((current) => {
@@ -83,47 +86,47 @@ export function FirewallPage() {
   return <section aria-labelledby="firewall-title">
     <header className="page-header">
       <div>
-        <p className="eyebrow">System</p>
-        <h1 id="firewall-title">Firewall</h1>
-        <p>Shows Windows Firewall profiles, notable rules and audit findings; nothing changes until you review and confirm in Windows.</p>
+        <p className="eyebrow">{t.eyebrow}</p>
+        <h1 id="firewall-title">{t.title}</h1>
+        <p>{t.intro}</p>
       </div>
-      <button type="button" disabled={loading} onClick={() => void refresh()}>Refresh</button>
+      <button type="button" disabled={loading} onClick={() => void refresh()}>{t.refresh}</button>
     </header>
-    {loading && <p role="status">Reading firewall status…</p>}
+    {loading && <p role="status">{t.loading}</p>}
     {error && <p role="alert">{error}</p>}
     {status && <>
       <section aria-labelledby="firewall-profiles">
-        <h2 id="firewall-profiles">Profiles</h2>
+        <h2 id="firewall-profiles">{t.profilesTitle}</h2>
         <ul>{status.profiles.map((profile) => {
           const key = profileKey(profile.profile);
-          const name = profileLabel[profile.profile];
+          const name = t.profile[profile.profile];
           const target = !profile.enabled;
           return <li key={profile.profile}>
-            <strong>{name}</strong>: {profile.enabled ? "On" : "Off"}{profile.active ? " (active)" : ""} · Inbound default: {actionLabel[profile.defaultInboundAction]} · Outbound default: {actionLabel[profile.defaultOutboundAction]}{profile.blockAllInboundTraffic ? " · Blocks all inbound" : ""}
+            <strong>{name}</strong>: {profile.enabled ? t.on : t.off}{profile.active ? t.active : ""}{t.inboundDefault(t.action[profile.defaultInboundAction])}{t.outboundDefault(t.action[profile.defaultOutboundAction])}{profile.blockAllInboundTraffic ? t.blocksAllInbound : ""}
             <label>
               <input type="checkbox" checked={selected.has(key)} onChange={() => toggle(key, { kind: "setFirewallProfileEnabled", profile: profile.profile, enabled: target })} />
-              {`Change ${name} to ${target ? "on" : "off"}`}
+              {t.changeProfile(name, target)}
             </label>
           </li>;
         })}</ul>
-        {profilesTurningOff.length > 0 && <p className="firewall-warning"><strong>High risk:</strong> turning off the {profilesTurningOff.map((profile) => profileLabel[profile]).join(", ")} firewall profile leaves this PC open to unsolicited network traffic on those networks.</p>}
+        {profilesTurningOff.length > 0 && <p className="firewall-warning"><strong>{t.highRisk}</strong>{t.profileOffWarning(profilesTurningOff.map((profile) => t.profile[profile]).join(", "))}</p>}
       </section>
 
       <section aria-labelledby="firewall-findings">
-        <h2 id="firewall-findings">Findings</h2>
-        {status.findings.length === 0 && <p>No findings.</p>}
+        <h2 id="firewall-findings">{t.findingsTitle}</h2>
+        {status.findings.length === 0 && <p>{t.noFindings}</p>}
         <ul>{status.findings.map((finding, index) => {
           const rule = finding.relatedRule;
           const ruleOn = rule !== null ? ruleStates.get(rule) : undefined;
-          const reason = rule === null ? null : ruleOn === undefined ? "Rule not found in the listed rules" : !ruleOn ? "Rule is already off" : null;
+          const reason = rule === null ? null : ruleOn === undefined ? t.ruleNotFound : !ruleOn ? t.ruleAlreadyOff : null;
           return <li key={`${finding.id}-${index}`}>
-            <p><span>{riskLabel[finding.severity]}</span> · <strong>{finding.title}</strong></p>
+            <p><span>{sc.risk[finding.severity]}</span> · <strong>{finding.title}</strong></p>
             <p>{finding.detail}</p>
             {rule !== null && <>
               <label>
                 <input type="checkbox" disabled={reason !== null} checked={reason === null && selected.has(ruleKey(rule))}
                   onChange={() => reason === null && toggle(ruleKey(rule), { kind: "setFirewallRuleEnabled", ruleName: rule, enabled: false })} />
-                {`Turn off rule ${rule}`}
+                {t.turnOffRule(rule)}
               </label>
               {reason && <span> ({reason})</span>}
             </>}
@@ -132,33 +135,33 @@ export function FirewallPage() {
       </section>
 
       <section aria-labelledby="firewall-rules">
-        <h2 id="firewall-rules">Rules</h2>
-        <p>{status.ruleCount} rules{status.rulesTruncated ? `; only the first ${status.rules.length} were read` : ""}. Showing {visible.length} of {matching.length} matching (at most {MAX_VISIBLE_RULES}).</p>
-        <label>Filter rules <input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
+        <h2 id="firewall-rules">{t.rulesTitle}</h2>
+        <p>{t.rulesSummary(fmt.number(status.ruleCount), status.rulesTruncated ? fmt.number(status.rules.length) : null, fmt.number(visible.length), fmt.number(matching.length), fmt.number(MAX_VISIBLE_RULES))}</p>
+        <label>{t.filterRules} <input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
         <table>
-          <thead><tr><th scope="col">Change</th><th scope="col">Name</th><th scope="col">State</th><th scope="col">Direction</th><th scope="col">Action</th><th scope="col">Profiles</th><th scope="col">Program</th><th scope="col">Local ports</th><th scope="col">Remote addresses</th></tr></thead>
+          <thead><tr><th scope="col">{t.columns.change}</th><th scope="col">{t.columns.name}</th><th scope="col">{t.columns.state}</th><th scope="col">{t.columns.direction}</th><th scope="col">{t.columns.action}</th><th scope="col">{t.columns.profiles}</th><th scope="col">{t.columns.program}</th><th scope="col">{t.columns.localPorts}</th><th scope="col">{t.columns.remoteAddresses}</th></tr></thead>
           <tbody>{visible.map((rule, index) => {
             const key = ruleKey(rule.name);
             const target = !(ruleStates.get(rule.name) ?? rule.enabled);
             return <tr key={`${rule.name}-${index}`}>
               <td><label>
                 <input type="checkbox" checked={selected.has(key)} onChange={() => toggle(key, { kind: "setFirewallRuleEnabled", ruleName: rule.name, enabled: target })} />
-                <span>{`Turn ${target ? "on" : "off"} rule ${rule.name}`}</span>
+                <span>{t.toggleRule(target, rule.name)}</span>
               </label></td>
               <td>{rule.name}</td>
-              <td>{rule.enabled ? "On" : "Off"}</td>
-              <td>{rule.direction}</td>
-              <td>{actionLabel[rule.action]}</td>
-              <td>{profileNames(rule.profiles)}</td>
-              <td>{rule.applicationName ?? "Any"}</td>
-              <td>{rule.localPorts || "Any"}</td>
-              <td>{rule.remoteAddresses || "Any"}</td>
+              <td>{rule.enabled ? t.on : t.off}</td>
+              <td>{t.direction[rule.direction]}</td>
+              <td>{t.action[rule.action]}</td>
+              <td>{profileNames(rule.profiles, t)}</td>
+              <td>{rule.applicationName ?? t.any}</td>
+              <td>{rule.localPorts || t.any}</td>
+              <td>{rule.remoteAddresses || t.any}</td>
             </tr>;
           })}</tbody>
         </table>
       </section>
     </>}
-    <SystemChangeReview changes={changes} describe={describe} onFinished={onFinished} />
-    <SystemChangeJournal module="firewall" describe={describe} refreshKey={journalKey} onFinished={onFinished} />
+    <SystemChangeReview changes={changes} describe={describeChange} onFinished={onFinished} />
+    <SystemChangeJournal module="firewall" describe={describeChange} refreshKey={journalKey} onFinished={onFinished} />
   </section>;
 }

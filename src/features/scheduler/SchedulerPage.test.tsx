@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanTicket, SystemChange } from "../../shared/system-change/types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { SchedulerPage } from "./SchedulerPage";
 import type { ScanSchedule, ScheduledScanSummary } from "./types";
 
@@ -88,4 +89,10 @@ it("removes exactly the selected schedule id", async () => {
   expect(decode(calls("create_system_change_plan")[0][1])).toEqual({ changes: [{ kind: "removeScanSchedule", scheduleId: uuid(1) }] });
   expect(calls("confirm_system_change_plan")).toHaveLength(0);
   expect(calls("execute_system_change_plan")).toHaveLength(0);
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><SchedulerPage /></I18nProvider>);
+  expect(await screen.findByRole("heading", { name: "Programaciones existentes" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "Análisis programados" })).toBeTruthy();
 });

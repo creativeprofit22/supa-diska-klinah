@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanTicket, SystemChange } from "../../shared/system-change/types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { PowerPage } from "./PowerPage";
 import type { PowerStatus } from "./types";
 
@@ -70,4 +71,10 @@ it("shows the reason and no checkbox when hibernation is unsupported", async () 
   render(<PowerPage />);
   expect(await screen.findByText(/Hibernation is not supported on this device/)).toBeTruthy();
   expect(screen.queryByRole("checkbox")).toBeNull();
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><PowerPage /></I18nProvider>);
+  expect(await screen.findByRole("heading", { name: "Hibernación" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "Energía e hibernación" })).toBeTruthy();
 });

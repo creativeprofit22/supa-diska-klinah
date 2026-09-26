@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanTicket, SystemChange } from "../../shared/system-change/types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { HostsPage } from "./HostsPage";
 import type { HostsReport } from "./types";
 
@@ -81,4 +82,10 @@ it("two selected lines produce one editHosts change with two ops in line order",
   fireEvent.click(screen.getByRole("button", { name: "Review selected changes (1)" }));
   await screen.findByRole("button", { name: "Continue to Windows confirmation" });
   expect(planned()).toEqual([[{ kind: "editHosts", lineOps: [{ line: 2, action: "disable" }, { line: 3, action: "restore" }] }]]);
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><HostsPage /></I18nProvider>);
+  expect(await screen.findByRole("heading", { name: "Hallazgos" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "Archivo hosts" })).toBeTruthy();
 });

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useFormat, useStrings } from "../../shared/i18n/I18nProvider";
 import { allowFinding, cancelScan, lastScan, quarantineFinding, scanStatus, startScan } from "./api";
 import { EvidenceBadge, errorMessage, evidenceDetail, evidenceKindLabel, isCancelled, summaryLine } from "./labels";
+import { protectionStrings } from "./strings";
 import type { Evidence, FindingView, ScanReport, ScanScope, ScanStatus } from "./types";
 
 const ORDER: Evidence["kind"][] = ["deterministic", "heuristic", "external", "unavailable"];
@@ -9,6 +11,9 @@ const STATUS_POLL_MS = 1000;
 const IDLE: ScanStatus = { running: false, filesScanned: 0, bytesHashed: 0 };
 
 export function ScanPage() {
+  const strings = useStrings(protectionStrings);
+  const t = strings.scan;
+  const fmt = useFormat();
   const [report, setReport] = useState<ScanReport | null>(null);
   // A scan started here, or one still running in the backend after this page was left.
   const [localRunning, setLocalRunning] = useState(false);
@@ -43,7 +48,7 @@ export function ScanPage() {
     try {
       setReport(await startScan(scope));
     } catch (reason) {
-      if (!isCancelled(reason)) setError(errorMessage(reason, "The scan could not run."));
+      if (!isCancelled(reason)) setError(errorMessage(reason, t.failed));
     } finally {
       setStatus(IDLE);
       setLocalRunning(false);
@@ -56,14 +61,14 @@ export function ScanPage() {
     try {
       if (action === "quarantine") {
         await quarantineFinding(finding.id);
-        setMessage(`Moved to quarantine: ${finding.path}`);
+        setMessage(t.quarantined(finding.path));
       } else {
         await allowFinding(finding.id);
-        setMessage("Heuristic findings for this exact file content will be hidden in future scans.");
+        setMessage(t.allowed);
       }
       setReport(await lastScan());
     } catch (reason) {
-      if (!isCancelled(reason)) setError(errorMessage(reason, "The action could not be completed."));
+      if (!isCancelled(reason)) setError(errorMessage(reason, strings.errors.actionFailed));
     } finally {
       setBusyId(null);
     }
@@ -77,35 +82,35 @@ export function ScanPage() {
 
   return <>
     <section aria-labelledby="scan-start">
-      <h2 id="scan-start">Start a scan</h2>
-      <p>Quick scan checks startup folders, Temp, Downloads and running programs. Folder scan checks one folder you choose. Links and junctions are never followed.</p>
+      <h2 id="scan-start">{t.startTitle}</h2>
+      <p>{t.startIntro}</p>
       <div className="protection-actions">
-        <button type="button" disabled={running} onClick={() => void run("quick")}>Quick scan</button>
-        <button type="button" disabled={running} onClick={() => void run("folder")}>Scan a folder…</button>
-        {running && <button type="button" onClick={() => void cancelScan()}>Cancel scan</button>}
+        <button type="button" disabled={running} onClick={() => void run("quick")}>{t.quick}</button>
+        <button type="button" disabled={running} onClick={() => void run("folder")}>{t.folder}</button>
+        {running && <button type="button" onClick={() => void cancelScan()}>{t.cancel}</button>}
       </div>
-      {running && <p role="status">Scanning…{status.running ? ` ${status.filesScanned.toLocaleString()} files examined` : ""}</p>}
+      {running && <p role="status">{t.scanning}{status.running ? t.filesExamined(fmt.number(status.filesScanned)) : ""}</p>}
     </section>
     {error && <p role="alert">{error}</p>}
     {message && <p role="status">{message}</p>}
     {report && <section aria-labelledby="scan-results">
-      <h2 id="scan-results">Results</h2>
-      <p>{summaryLine(report.summary)}{report.summary.allowlisted > 0 ? ` · ${report.summary.allowlisted} hidden by your allowlist` : ""}{report.summary.reparsePointsSkipped > 0 ? ` · ${report.summary.reparsePointsSkipped} links or junctions skipped (not followed)` : ""}</p>
-      {report.summary.cancelled && <p role="note">The scan was cancelled; results are partial.</p>}
-      {report.summary.truncated && <p role="note">The scan stopped at its size limit; results are partial.</p>}
-      <p className="protection-hint">A file with no findings has only been compared with the current rules and heuristics. Detection is limited; see the Rules section.</p>
+      <h2 id="scan-results">{t.resultsTitle}</h2>
+      <p>{summaryLine(report.summary, strings, fmt.number)}{report.summary.allowlisted > 0 ? t.allowlisted(fmt.number(report.summary.allowlisted)) : ""}{report.summary.reparsePointsSkipped > 0 ? t.reparseSkipped(fmt.number(report.summary.reparsePointsSkipped)) : ""}</p>
+      {report.summary.cancelled && <p role="note">{t.cancelled}</p>}
+      {report.summary.truncated && <p role="note">{t.truncated}</p>}
+      <p className="protection-hint">{t.limitsHint}</p>
       {groups.map(([kind, items]) => <section key={kind} aria-labelledby={`scan-${kind}`}>
-        <h3 id={`scan-${kind}`}>{evidenceKindLabel[kind]} ({items.length})</h3>
+        <h3 id={`scan-${kind}`}>{strings.evidenceKind[kind]} ({items.length})</h3>
         <ul className="protection-findings">{items.slice(0, MAX_VISIBLE_FINDINGS).map((finding) => <li key={finding.id}>
           <EvidenceBadge evidence={finding.evidence} /> <code>{finding.path}</code>
-          <p>{evidenceDetail(finding.evidence)}</p>
-          {finding.evidence.kind === "heuristic" && <p className="protection-hint">False positives: {finding.evidence.falsePositiveNote}</p>}
+          <p>{evidenceDetail(finding.evidence, strings)}</p>
+          {finding.evidence.kind === "heuristic" && <p className="protection-hint">{t.falsePositives(finding.evidence.falsePositiveNote)}</p>}
           <div className="protection-actions">
-            {finding.canQuarantine && <button type="button" disabled={busyId !== null} onClick={() => void act(finding, "quarantine")}>Quarantine…</button>}
-            {finding.evidence.kind === "heuristic" && finding.sha256 && <button type="button" disabled={busyId !== null} onClick={() => void act(finding, "allow")}>Hide for this file</button>}
+            {finding.canQuarantine && <button type="button" disabled={busyId !== null} onClick={() => void act(finding, "quarantine")}>{t.quarantine}</button>}
+            {finding.evidence.kind === "heuristic" && finding.sha256 && <button type="button" disabled={busyId !== null} onClick={() => void act(finding, "allow")}>{t.hide}</button>}
           </div>
         </li>)}</ul>
-        {items.length > MAX_VISIBLE_FINDINGS && <p>Showing the first {MAX_VISIBLE_FINDINGS} of {items.length}.</p>}
+        {items.length > MAX_VISIBLE_FINDINGS && <p>{t.showingFirst(fmt.number(MAX_VISIBLE_FINDINGS), fmt.number(items.length))}</p>}
       </section>)}
     </section>}
   </>;

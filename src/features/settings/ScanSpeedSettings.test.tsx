@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { ScanSpeedSettings } from "./ScanSpeedSettings";
 
 const { getScanSettings, setScanProfile } = vi.hoisted(() => ({
@@ -66,5 +67,18 @@ describe("ScanSpeedSettings", () => {
 
     expect((await screen.findByRole("alert")).textContent).toContain("could not be saved");
     expect((screen.getByRole("combobox", { name: /^Drive type/ }) as HTMLSelectElement).value).toBe("ssd");
+  });
+
+  it("renders Spanish labels, profiles and hints for es-MX", async () => {
+    getScanSettings.mockResolvedValue({ schemaVersion: 1, profile: "auto" });
+
+    render(<I18nProvider languages={["es-MX"]}><ScanSpeedSettings /></I18nProvider>);
+
+    const select = await screen.findByRole("combobox", { name: /^Tipo de unidad/ });
+    expect(screen.getByRole("heading", { name: "Velocidad de análisis" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Disco duro" })).toBeTruthy();
+    fireEvent.change(select, { target: { value: "hdd" } });
+    expect(screen.getByText(/unidades mecánicas/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Guardar configuración de análisis" })).toBeTruthy();
   });
 });

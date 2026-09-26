@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { OptimizerPage } from "./OptimizerPage";
 import type { OptimizerReport, Proposal } from "./types";
 import type { PlannedChange, SystemChange } from "../../shared/system-change/types";
@@ -113,4 +114,10 @@ it("offers no one-click apply control", async () => {
   await screen.findByText("Disable telemetry service");
   for (const role of ["button", "link", "checkbox", "menuitem"] as const)
     expect(screen.queryAllByRole(role, { name: /apply all|optimize now|one.?click/i })).toHaveLength(0);
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><OptimizerPage /></I18nProvider>);
+  expect(await screen.findByRole("button", { name: "Seleccionar sugeridas" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "Optimización rápida" })).toBeTruthy();
 });

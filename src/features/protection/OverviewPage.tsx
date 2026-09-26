@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
+import { useFormat, useStrings } from "../../shared/i18n/I18nProvider";
 import { getDefenderHistory, getOverview, setNetworkPolicy } from "./api";
 import { EvidenceBadge, errorMessage, evidenceDetail, summaryLine } from "./labels";
+import { protectionStrings } from "./strings";
 import type { DefenderHistory, NetworkPolicy, ProtectionOverview } from "./types";
 
-export const rulesSourceLabel = {
-  installed: "Installed pack",
-  previousFallback: "Previous pack (the newest pack failed verification)",
-  embeddedBaseline: "Built-in baseline pack",
-} as const;
+/** English labels; components use `useStrings(protectionStrings).rulesSource`. */
+export const rulesSourceLabel = protectionStrings.en.rulesSource;
 
 export function OverviewPage() {
+  const strings = useStrings(protectionStrings);
+  const t = strings.overview;
+  const fmt = useFormat();
   const [overview, setOverview] = useState<ProtectionOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -21,9 +23,9 @@ export function OverviewPage() {
       setOverview(await getOverview());
       setError(null);
     } catch (reason) {
-      setError(errorMessage(reason, "Protection status could not be read."));
+      setError(errorMessage(reason, t.loadFailed));
     }
-  }, []);
+  }, [t]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   // The toggles stay enabled while saving: disabling them would drop keyboard
@@ -36,7 +38,7 @@ export function OverviewPage() {
       setOverview((current) => current && { ...current, settings });
       setError(null);
     } catch (reason) {
-      setError(errorMessage(reason, "The setting could not be saved."));
+      setError(errorMessage(reason, t.saveFailed));
     } finally {
       setSaving(false);
     }
@@ -47,76 +49,76 @@ export function OverviewPage() {
     try {
       setDefender(await getDefenderHistory());
     } catch (reason) {
-      setError(errorMessage(reason, "Defender history could not be read."));
+      setError(errorMessage(reason, t.defenderFailed));
     } finally {
       setDefenderLoading(false);
     }
   };
 
-  if (!overview) return error ? <p role="alert">{error}</p> : <p role="status">Loading protection status…</p>;
+  if (!overview) return error ? <p role="alert">{error}</p> : <p role="status">{t.loading}</p>;
   const { settings, rules } = overview;
   const network = settings.network;
 
   return <>
     {error && <p role="alert">{error}</p>}
     <section aria-labelledby="protection-status">
-      <h2 id="protection-status">Status</h2>
+      <h2 id="protection-status">{t.statusTitle}</h2>
       <dl className="protection-facts">
-        <dt>Rules</dt>
-        <dd>{rulesSourceLabel[rules.source]}: sequence {rules.sequence}, {rules.ruleCount} rules</dd>
-        <dt>Last scan</dt>
-        <dd>{overview.lastScan ? summaryLine(overview.lastScan) : "No scan yet"}</dd>
-        <dt>Quarantine</dt>
-        <dd>{overview.quarantineCount} items</dd>
+        <dt>{t.rules}</dt>
+        <dd>{t.rulesValue(strings.rulesSource[rules.source], String(rules.sequence), fmt.number(rules.ruleCount))}</dd>
+        <dt>{t.lastScan}</dt>
+        <dd>{overview.lastScan ? summaryLine(overview.lastScan, strings, fmt.number) : t.noScan}</dd>
+        <dt>{t.quarantine}</dt>
+        <dd>{t.quarantineItems(fmt.number(overview.quarantineCount))}</dd>
       </dl>
       {rules.recoveryNote && <p role="note">{rules.recoveryNote}</p>}
     </section>
 
     <section aria-labelledby="protection-network">
-      <h2 id="protection-network">Network use</h2>
-      <p>Everything below is off by default. Scanning always runs on this PC without the network.</p>
+      <h2 id="protection-network">{t.networkTitle}</h2>
+      <p>{t.networkIntro}</p>
       <fieldset aria-busy={saving}>
-        <legend>Optional features that send data</legend>
+        <legend>{t.networkLegend}</legend>
         <label>
           <input type="checkbox" checked={network.ruleDownload}
             onChange={(event) => void update({ ...network, ruleDownload: event.target.checked }, settings.amsiEnabled)} />
-          Allow downloading signed rule packs
+          {t.ruleDownload}
         </label>
-        <p className="protection-hint">Contacts raw.githubusercontent.com only when you press Download. Sends no information about your files.</p>
+        <p className="protection-hint">{t.ruleDownloadHint}</p>
         <label>
           <input type="checkbox" checked={network.passwordBreachCheck}
             onChange={(event) => void update({ ...network, passwordBreachCheck: event.target.checked }, settings.amsiEnabled)} />
-          Allow the password breach check
+          {t.breachCheck}
         </label>
-        <p className="protection-hint">Sends only the first 5 characters of the password's SHA-1 hash to api.pwnedpasswords.com. The password itself never leaves this PC.</p>
+        <p className="protection-hint">{t.breachCheckHint}</p>
         <label>
           <input type="checkbox" checked={settings.amsiEnabled}
             onChange={(event) => void update(network, event.target.checked)} />
-          Ask the installed antivirus about flagged files (AMSI)
+          {t.amsi}
         </label>
-        <p className="protection-hint">Your antivirus may use its own cloud service for this, depending on its settings.</p>
+        <p className="protection-hint">{t.amsiHint}</p>
       </fieldset>
     </section>
 
     <section aria-labelledby="protection-defender">
-      <h2 id="protection-defender">Microsoft Defender history</h2>
-      <p>Reads what Defender has already recorded. This does not start a Defender scan.</p>
-      <button type="button" disabled={defenderLoading} onClick={() => void loadDefender()}>Read detection history</button>
-      {defenderLoading && <p role="status">Reading Defender history…</p>}
-      {defender?.unavailable && <p><EvidenceBadge evidence={defender.unavailable} /> {evidenceDetail(defender.unavailable)}. Defender may not be the active antivirus.</p>}
-      {defender && !defender.unavailable && defender.detections.length === 0 && <p>Defender has no recorded detections.</p>}
+      <h2 id="protection-defender">{t.defenderTitle}</h2>
+      <p>{t.defenderIntro}</p>
+      <button type="button" disabled={defenderLoading} onClick={() => void loadDefender()}>{t.readHistory}</button>
+      {defenderLoading && <p role="status">{t.readingHistory}</p>}
+      {defender?.unavailable && <p><EvidenceBadge evidence={defender.unavailable} /> {t.defenderUnavailable(evidenceDetail(defender.unavailable, strings))}</p>}
+      {defender && !defender.unavailable && defender.detections.length === 0 && <p>{t.noDetections}</p>}
       {defender && defender.detections.length > 0 && <ul>{defender.detections.map((detection, index) => <li key={`${detection.threatId}-${index}`}>
-        <EvidenceBadge evidence={detection.evidence} /> Threat {detection.threatId ?? "unknown"}{detection.detectedAt ? `, first seen ${detection.detectedAt}` : ""}
+        <EvidenceBadge evidence={detection.evidence} /> {t.threat(detection.threatId ?? t.unknownThreat)}{detection.detectedAt ? t.firstSeen(detection.detectedAt) : ""}
         {detection.resources.length > 0 && <ul>{detection.resources.map((resource) => <li key={resource}><code>{resource}</code></li>)}</ul>}
       </li>)}</ul>}
-      {defender?.truncated && <p role="note">Showing the first 500 recorded detections.</p>}
+      {defender?.truncated && <p role="note">{t.truncated}</p>}
     </section>
 
     <section aria-labelledby="protection-heuristics">
-      <h2 id="protection-heuristics">Heuristics and their limits</h2>
+      <h2 id="protection-heuristics">{t.heuristicsTitle}</h2>
       <ul>{overview.heuristics.map((heuristic) => <li key={heuristic.id}>
         <strong>{heuristic.title}</strong> <code>{heuristic.id}</code>
-        <p className="protection-hint">False positives: {heuristic.falsePositiveNote}</p>
+        <p className="protection-hint">{t.falsePositives(heuristic.falsePositiveNote)}</p>
       </li>)}</ul>
     </section>
   </>;

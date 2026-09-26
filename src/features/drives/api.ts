@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { type DrivesStrings, drivesStrings } from "./strings";
 
 export interface DriveSummary {
   driveId: string;
@@ -26,10 +27,13 @@ export function listDriveInventory(): Promise<DriveInventory> {
   });
 }
 
-export function driveInventoryError(reason: unknown): string {
+export function driveInventoryError(
+  reason: unknown,
+  t: DrivesStrings["errors"] = drivesStrings.en.errors,
+): string {
   const code = typeof reason === "object" && reason !== null && "code" in reason
     ? reason.code : null;
-  if (code === "busy") return "A drive inventory is already running. Try again shortly.";
-  if (code === "timeout") return "Windows took too long to report drive information. Try again.";
-  return "Drive information is unavailable. Open the Windows app and try again.";
+  if (code === "busy") return t.busy;
+  if (code === "timeout") return t.timeout;
+  return t.unavailable;
 }

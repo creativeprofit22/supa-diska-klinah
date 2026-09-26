@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { PlanTicket, SystemChange } from "../../shared/system-change/types";
+import { I18nProvider } from "../../shared/i18n/I18nProvider";
 import { UpdatesPage } from "./UpdatesPage";
 import type { UpdateStatus } from "./types";
 
@@ -163,4 +164,10 @@ it("clears an earlier started confirmation when a later check fails", async () =
   fireEvent.click(button);
   expect((await screen.findByRole("alert")).textContent).toBe("Update service is not running.");
   expect(screen.queryByText(startedText)).toBeNull();
+});
+
+it("renders in Latin American Spanish", async () => {
+  render(<I18nProvider languages={["es-MX"]}><UpdatesPage /></I18nProvider>);
+  expect(await screen.findByRole("heading", { name: "Directivas de actualización" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Buscar actualizaciones ahora" })).toBeTruthy();
 });

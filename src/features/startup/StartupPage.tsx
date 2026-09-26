@@ -1,29 +1,31 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useStrings } from "../../shared/i18n/I18nProvider";
 import { SystemChangeJournal } from "../../shared/system-change/SystemChangeJournal";
 import { SystemChangeReview } from "../../shared/system-change/SystemChangeReview";
 import { systemChangeError } from "../../shared/system-change/api";
+import { systemChangeStrings } from "../../shared/system-change/strings";
 import type { SystemChange } from "../../shared/system-change/types";
 import { listStartupItems } from "./api";
-import type { StartupItem, StartupSource } from "./types";
+import { startupStrings, type StartupStrings } from "./strings";
+import type { StartupItem } from "./types";
 
-const sourceLabel: Record<StartupSource, string> = {
-  run: "Run key", run32: "32-bit Run key", startupFolder: "Startup folder", runOnce: "RunOnce key", logonTask: "Scheduled task (at sign-in)",
-};
-
-function readOnlyReason(item: StartupItem): string {
-  if (item.source === "runOnce") return "Read-only: RunOnce entries run a single time and Windows removes them afterwards, so they cannot be turned on or off here.";
-  if (item.source === "logonTask") return "Read-only: this is a scheduled task with a sign-in trigger. Manage it in Task Scheduler.";
-  return "Read-only: this entry cannot be turned on or off here.";
+function readOnlyReason(item: StartupItem, t: StartupStrings): string {
+  if (item.source === "runOnce") return t.readOnlyRunOnce;
+  if (item.source === "logonTask") return t.readOnlyLogonTask;
+  return t.readOnly;
 }
 
 const itemKey = (item: StartupItem) => `${item.scope}|${item.source}|${item.location ?? ""}|${item.name}`;
 
-function describe(change: SystemChange): string {
-  if (change.kind === "setStartupEntry") return `${change.enabled ? "Enable" : "Disable"} startup item: ${change.entry.name}`;
+function describe(change: SystemChange, t: StartupStrings): string {
+  if (change.kind === "setStartupEntry") return t.describe(change.enabled, change.entry.name);
   return change.kind;
 }
 
 export function StartupPage() {
+  const t = useStrings(startupStrings);
+  const errors = useStrings(systemChangeStrings).errors;
+  const describeChange = useCallback((change: SystemChange) => describe(change, t), [t]);
   const [items, setItems] = useState<StartupItem[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,11 +39,11 @@ export function StartupPage() {
       setSelected([]);
       setError(null);
     } catch (reason) {
-      setError(systemChangeError(reason));
+      setError(systemChangeError(reason, errors));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [errors]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   const changes = useMemo<SystemChange[]>(() => (items ?? []).flatMap((item) => {
@@ -55,34 +57,34 @@ export function StartupPage() {
   return <section aria-labelledby="startup-title">
     <header className="page-header">
       <div>
-        <p className="eyebrow">System</p>
-        <h1 id="startup-title">Startup apps</h1>
-        <p>Choose which programs start when you sign in; turning one off only marks it disabled, like Task Manager does.</p>
+        <p className="eyebrow">{t.eyebrow}</p>
+        <h1 id="startup-title">{t.title}</h1>
+        <p>{t.intro}</p>
       </div>
     </header>
-    <p>Deleting startup entries is not offered. Turning an item off keeps it listed here so you can turn it back on later.</p>
-    <button type="button" disabled={loading} onClick={() => void refresh()}>Refresh</button>
-    {loading && <p role="status">Loading startup items…</p>}
+    <p>{t.noDelete}</p>
+    <button type="button" disabled={loading} onClick={() => void refresh()}>{t.refresh}</button>
+    {loading && <p role="status">{t.loading}</p>}
     {error && <p role="alert">{error}</p>}
-    {items?.length === 0 && <p>No startup items were found.</p>}
+    {items?.length === 0 && <p>{t.none}</p>}
     {!!items?.length && <ul className="startup-list">
       {items.map((item) => {
         const key = itemKey(item);
-        const scope = item.scope === "user" ? "Your account" : "All users";
+        const scope = item.scope === "user" ? t.yourAccount : t.allUsers;
         return <li key={key}>
           <strong>{item.name}</strong>
-          <p>{scope} · {sourceLabel[item.source]} · Currently {item.enabled ? "enabled" : "disabled"}</p>
+          <p>{scope} · {t.source[item.source]}{t.currently(item.enabled)}</p>
           <p><code>{item.command}</code></p>
           {item.toggleable && item.location !== null
             ? <label>
-                <input type="checkbox" aria-label={`Change ${item.name} to ${item.enabled ? "disabled" : "enabled"}`} checked={selected.includes(key)} onChange={() => toggle(key)} />
-                {" "}Change to {item.enabled ? "disabled" : "enabled"}
+                <input type="checkbox" aria-label={t.changeItem(item.name, !item.enabled)} checked={selected.includes(key)} onChange={() => toggle(key)} />
+                {" "}{t.changeTo(!item.enabled)}
               </label>
-            : <p>{readOnlyReason(item)}</p>}
+            : <p>{readOnlyReason(item, t)}</p>}
         </li>;
       })}
     </ul>}
-    <SystemChangeReview changes={changes} describe={describe} onFinished={onFinished} />
-    <SystemChangeJournal module="startup" describe={describe} refreshKey={journalKey} onFinished={onFinished} />
+    <SystemChangeReview changes={changes} describe={describeChange} onFinished={onFinished} />
+    <SystemChangeJournal module="startup" describe={describeChange} refreshKey={journalKey} onFinished={onFinished} />
   </section>;
 }

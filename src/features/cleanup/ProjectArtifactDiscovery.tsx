@@ -1,14 +1,15 @@
 import { useMemo, useState, type FormEvent } from "react";
+import { useFormat, useStrings } from "../../shared/i18n/I18nProvider";
 import {
   type ArtifactEcosystem,
-  type ArtifactType,
   type ProjectArtifactRecord,
 } from "./api/previewCleanup";
-import { formatBytes, formatModified } from "./format";
+import { formatModified } from "./format";
 import { useProjectArtifactDiscovery } from "./model/useProjectArtifactDiscovery";
+import { cleanupStrings, type CleanupStrings } from "./strings";
 
 const MAX_PROJECT_ROOT_BYTES = 4_096;
-const PROJECT_ROOT_LENGTH_ERROR = "Project root must be 4,096 UTF-8 bytes or fewer.";
+// Ecosystem and product names stay untranslated.
 const ECOSYSTEM_LABELS: Record<ArtifactEcosystem, string> = {
   rust: "Rust",
   nodeJs: "Node.js",
@@ -27,32 +28,15 @@ const ECOSYSTEM_LABELS: Record<ArtifactEcosystem, string> = {
   unreal: "Unreal Engine",
   godot: "Godot",
 };
-const ARTIFACT_LABELS: Record<ArtifactType, string> = {
-  installedDependencies: "Installed dependencies",
-  buildOutput: "Build output",
-  compilerCache: "Compiler cache",
-  frameworkCache: "Framework cache",
-  virtualEnvironment: "Virtual environment",
-  testCache: "Test cache",
-  generatedIntermediate: "Generated intermediate",
-  importedAssetCache: "Imported asset cache",
-};
-const CONSEQUENCE_LABELS = {
-  localRebuild: "Local rebuild",
-  networkDownloadRequired: "Network download required",
-  toolchainRequired: "Toolchain required",
-  expensiveReimport: "Expensive asset reimport",
-} as const;
-
-function formatAge(seconds?: number | null): string {
-  if (seconds == null) return "Unavailable";
-  if (seconds < 60) return `${seconds} seconds`;
+function formatAge(t: CleanupStrings["projects"], seconds?: number | null): string {
+  if (seconds == null) return t.unavailable;
+  if (seconds < 60) return t.ageSeconds(seconds);
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  if (minutes < 60) return t.ageMinutes(minutes);
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  if (hours < 24) return t.ageHours(hours);
   const days = Math.floor(hours / 24);
-  return `${days} ${days === 1 ? "day" : "days"}`;
+  return t.ageDays(days);
 }
 
 interface ProjectGroup {
@@ -66,6 +50,8 @@ interface ProjectGroup {
 export function ProjectArtifactDiscovery() {
   const [root, setRoot] = useState("");
   const state = useProjectArtifactDiscovery();
+  const t = useStrings(cleanupStrings).projects;
+  const fmt = useFormat();
   const rootTooLong = new TextEncoder().encode(root).length > MAX_PROJECT_ROOT_BYTES;
   const busy = state.loadingRoots || state.scanning || state.pending !== null;
   const activeRoots = state.roots.filter((saved) => !saved.paused);
@@ -98,17 +84,14 @@ export function ProjectArtifactDiscovery() {
     <section className="project-artifacts" aria-labelledby="project-artifacts-heading">
       <div className="project-artifacts-header">
         <div>
-          <p className="kicker">Developer storage</p>
-          <h2 id="project-artifacts-heading">Coding project artifacts</h2>
+          <p className="kicker">{t.kicker}</p>
+          <h2 id="project-artifacts-heading">{t.heading}</h2>
         </div>
-        <p id="project-root-help">
-          Save explicit project roots, then scan marker-backed rebuildable files. Nothing is selected
-          or removed.
-        </p>
+        <p id="project-root-help">{t.help}</p>
       </div>
 
       <form className="project-artifact-form" onSubmit={submit}>
-        <label htmlFor="project-root">Add an absolute project path</label>
+        <label htmlFor="project-root">{t.addLabel}</label>
         <div className="project-artifact-form-row">
           <input
             id="project-root"
@@ -123,12 +106,12 @@ export function ProjectArtifactDiscovery() {
             onChange={(event) => setRoot(event.target.value)}
           />
           <button type="submit" disabled={busy || rootTooLong || !root.trim()}>
-            {state.pending === "add" ? "Adding…" : "Add root"}
+            {state.pending === "add" ? t.adding : t.addRoot}
           </button>
         </div>
         {rootTooLong && (
           <p id="project-root-error" className="error-message" role="alert">
-            {PROJECT_ROOT_LENGTH_ERROR}
+            {t.rootTooLong(fmt.number(MAX_PROJECT_ROOT_BYTES))}
           </p>
         )}
       </form>
@@ -138,38 +121,38 @@ export function ProjectArtifactDiscovery() {
           <p>{state.error}</p>
           {state.loadingRoots && (
             <button type="button" className="secondary-button" onClick={state.reload}>
-              Reload saved roots
+              {t.reloadRoots}
             </button>
           )}
         </div>
       )}
 
-      <div className="project-root-manager" aria-labelledby="saved-project-roots-heading">
+      <section className="project-root-manager" aria-labelledby="saved-project-roots-heading">
         <div className="project-root-manager-heading">
-          <h3 id="saved-project-roots-heading">Saved roots</h3>
+          <h3 id="saved-project-roots-heading">{t.savedRoots}</h3>
           <button
             type="button"
             onClick={() => void state.scan()}
             disabled={busy || activeRoots.length === 0}
           >
-            {state.scanning ? "Scanning…" : "Scan active roots"}
+            {state.scanning ? t.scanning : t.scanActive}
           </button>
         </div>
-        {state.loadingRoots && <p role="status">Loading saved roots.</p>}
+        {state.loadingRoots && <p role="status">{t.loadingRoots}</p>}
         {!state.loadingRoots && state.roots.length === 0 && (
-          <p>No roots saved. Add one absolute path to begin.</p>
+          <p>{t.noRoots}</p>
         )}
         {state.roots.length > 0 && (
           <ul className="project-root-list">
             {state.roots.map((saved) => (
               <li key={saved.id}>
                 <div className="project-root-details">
-                  <strong>{saved.paused ? "Paused" : "Active"}</strong>
+                  <strong>{saved.paused ? t.paused : t.active}</strong>
                   <span className="project-artifact-path">{saved.displayPath}</span>
                   <small>
-                    Last scan: {saved.lastScannedAtUnixSeconds == null
-                      ? "Never"
-                      : formatModified(saved.lastScannedAtUnixSeconds)}
+                    {t.lastScan}{saved.lastScannedAtUnixSeconds == null
+                      ? t.never
+                      : formatModified(saved.lastScannedAtUnixSeconds, fmt.locale)}
                   </small>
                 </div>
                 <div className="project-root-actions">
@@ -177,61 +160,55 @@ export function ProjectArtifactDiscovery() {
                     type="button"
                     onClick={() => void state.scan(saved.id)}
                     disabled={busy || saved.paused}
-                    aria-label={`Scan ${saved.displayPath}`}
+                    aria-label={t.scanRoot(saved.displayPath)}
                   >
-                    Scan
+                    {t.scan}
                   </button>
                   <button
                     type="button"
                     className="secondary-button"
                     onClick={() => void state.setPaused(saved.id, !saved.paused)}
                     disabled={busy}
-                    aria-label={`${saved.paused ? "Resume" : "Pause"} ${saved.displayPath}`}
+                    aria-label={saved.paused ? t.resumeRoot(saved.displayPath) : t.pauseRoot(saved.displayPath)}
                   >
-                    {saved.paused ? "Resume" : "Pause"}
+                    {saved.paused ? t.resume : t.pause}
                   </button>
                   <button
                     type="button"
                     className="secondary-button"
                     onClick={() => void state.remove(saved.id)}
                     disabled={busy}
-                    aria-label={`Remove ${saved.displayPath}`}
+                    aria-label={t.removeRoot(saved.displayPath)}
                   >
-                    Remove
+                    {t.remove}
                   </button>
                 </div>
               </li>
             ))}
           </ul>
         )}
-        <p className="project-root-note">Removing a root only forgets it. Project files stay unchanged.</p>
-      </div>
+        <p className="project-root-note">{t.removeNote}</p>
+      </section>
 
       <div className="project-artifact-status" role="status" aria-live="polite">
-        {!state.attempted && !state.scanning && <p>Choose Scan when you want to inspect saved roots.</p>}
-        {state.scanning && <p>Scanning project roots without changing files.</p>}
+        {!state.attempted && !state.scanning && <p>{t.idle}</p>}
+        {state.scanning && <p>{t.scanningRoots}</p>}
         {state.result && state.result.records.length === 0 && (
-          <p>No marker-backed project artifacts were found.</p>
+          <p>{t.noArtifacts}</p>
         )}
         {state.result && state.result.records.length > 0 && (
-          <p>
-            {state.result.records.length} rebuildable{" "}
-            {state.result.records.length === 1 ? "artifact" : "artifacts"} found. All are not
-            selected.
-          </p>
+          <p>{t.found(state.result.records.length)}</p>
         )}
       </div>
 
       {state.result && state.result.diagnostics.length > 0 && (
         <p className="project-artifact-diagnostics">
-          {state.result.diagnostics.length}{" "}
-          {state.result.diagnostics.length === 1 ? "location was" : "locations were"} skipped or
-          suppressed to avoid overlap.
+          {t.diagnostics(state.result.diagnostics.length)}
         </p>
       )}
 
       {groups.length > 0 && (
-        <ul className="project-artifact-groups" aria-label="Discovered project artifacts">
+        <ul className="project-artifact-groups" aria-label={t.listLabel}>
           {groups.map((group) => (
             <li key={group.key}>
               <header>
@@ -244,18 +221,18 @@ export function ProjectArtifactDiscovery() {
               <ul className="project-artifact-records">
                 {group.records.map((record) => (
                   <li key={record.id}>
-                    <h4>{ARTIFACT_LABELS[record.artifact.artifactType]}</h4>
+                    <h4>{t.artifacts[record.artifact.artifactType]}</h4>
                     <p className="project-artifact-path">{record.displayPath}</p>
                     <dl>
-                      <div><dt>Size</dt><dd>{formatBytes(record.bytes)}</dd></div>
-                      <div><dt>Age</dt><dd>{formatAge(record.ageSeconds)}</dd></div>
-                      <div><dt>Modified</dt><dd>{record.modifiedUnixSeconds == null ? "Unavailable" : formatModified(record.modifiedUnixSeconds)}</dd></div>
-                      <div><dt>Activity</dt><dd>{record.activity === "inUse" ? "In use" : "Idle"}</dd></div>
-                      <div><dt>Confidence</dt><dd>{record.artifact.confidence === "high" ? "High" : "Medium"}</dd></div>
-                      <div><dt>Risk</dt><dd>{record.risk === "safe" ? "Safe" : record.risk === "highImpact" ? "High impact" : "Recoverable"}</dd></div>
-                      <div><dt>Recoverability</dt><dd>Rebuildable</dd></div>
-                      <div><dt>Rebuild consequence</dt><dd>{CONSEQUENCE_LABELS[record.artifact.rebuildConsequence]}</dd></div>
-                      <div><dt>Selection</dt><dd>Not selected</dd></div>
+                      <div><dt>{t.size}</dt><dd>{fmt.bytes(record.bytes)}</dd></div>
+                      <div><dt>{t.age}</dt><dd>{formatAge(t, record.ageSeconds)}</dd></div>
+                      <div><dt>{t.modified}</dt><dd>{record.modifiedUnixSeconds == null ? t.unavailable : formatModified(record.modifiedUnixSeconds, fmt.locale)}</dd></div>
+                      <div><dt>{t.activity}</dt><dd>{record.activity === "inUse" ? t.inUse : t.idleActivity}</dd></div>
+                      <div><dt>{t.confidence}</dt><dd>{record.artifact.confidence === "high" ? t.high : t.medium}</dd></div>
+                      <div><dt>{t.risk}</dt><dd>{record.risk === "safe" ? t.safe : record.risk === "highImpact" ? t.highImpact : t.recoverable}</dd></div>
+                      <div><dt>{t.recoverability}</dt><dd>{t.rebuildable}</dd></div>
+                      <div><dt>{t.rebuildConsequence}</dt><dd>{t.consequences[record.artifact.rebuildConsequence]}</dd></div>
+                      <div><dt>{t.selection}</dt><dd>{t.notSelected}</dd></div>
                     </dl>
                   </li>
                 ))}

@@ -1,15 +1,13 @@
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { cleanupActions, type CleanupDisposition, type CleanupExecutionSummary, type CleanupPlanSummary } from "../cleanup/api";
 import { useCleanupHistory } from "../cleanup/useCleanupHistory";
-import { formatBytes } from "../format";
+import { useFormat, useStrings } from "../i18n/I18nProvider";
 import { CleanupOutcomes, cleanupSucceeded as successful, canUndoCleanup } from "./CleanupOutcomes";
 import { createStoragePlan, storageError } from "./api";
+import { storageStrings } from "./strings";
 import type { StorageSelection } from "./types";
 import "./storage.css";
 
-const dispositionLabels: Record<CleanupDisposition, string> = {
-  recycleBin: "Move to Recycle Bin", quarantine: "Move to app recovery", permanent: "Delete permanently",
-};
 const defaultDispositions: readonly CleanupDisposition[] = ["recycleBin"];
 export function StoragePlanReview({ selection, dispositions = defaultDispositions, createPlan = createStoragePlan, actions = cleanupActions, onExecuted }: {
   selection: StorageSelection | null;
@@ -19,6 +17,10 @@ export function StoragePlanReview({ selection, dispositions = defaultDisposition
   actions?: typeof cleanupActions;
   onExecuted: () => void;
 }) {
+  const strings = useStrings(storageStrings);
+  const t = strings.review;
+  const dispositionLabels = t.dispositions;
+  const fmt = useFormat();
   const key = JSON.stringify(selection);
   const currentKey = useRef(key);
   const mounted = useRef(false);
@@ -81,7 +83,7 @@ export function StoragePlanReview({ selection, dispositions = defaultDisposition
     } catch (cause) {
       if (mounted.current && requestVersion === version.current) {
         setPlan(null);
-        setError(storageError(cause));
+        setError(storageError(cause, strings.errors));
         if (disposition === "quarantine" && typeof cause === "object" && cause !== null &&
             "code" in cause && cause.code === "recovery_volume_unsupported") setRecoveryUnavailable(true);
       }
@@ -98,7 +100,7 @@ export function StoragePlanReview({ selection, dispositions = defaultDisposition
       else void history.refresh();
       onExecuted();
     } catch {
-      if (mounted.current) setError("The operation was not confirmed or could not finish. Load history to check outcomes before retrying.");
+      if (mounted.current) setError(t.operationUnconfirmed);
     } finally {
       lock.current = false;
       if (mounted.current) { setBusy(false); setPlan(null); }
@@ -114,51 +116,54 @@ export function StoragePlanReview({ selection, dispositions = defaultDisposition
   };
   const dismiss = () => { if (!lock.current) { version.current++; setPlan(null); } };
 
-  return <section ref={region} tabIndex={-1} className="storage-review" aria-label="Storage cleanup review">
+  return <section ref={region} tabIndex={-1} className="storage-review" aria-label={t.regionLabel}>
     <div className="cleanup-actions">
       {dispositions.map(disposition => <button key={disposition} type="button" disabled={!selection || busy || (disposition === "quarantine" && recoveryUnavailable)} onClick={() => void prepare(disposition)}>
-        Review: {dispositionLabels[disposition]}
+        {t.reviewAction(dispositionLabels[disposition])}
       </button>)}
-      <button type="button" disabled={busy || history.loading} onClick={() => void history.refresh()}>{history.loaded ? "Refresh newest cleanup history" : "Load cleanup history"}</button>
+      <button type="button" disabled={busy || history.loading} onClick={() => void history.refresh()}>{history.loaded ? t.refreshHistory : t.loadHistory}</button>
     </div>
-    {busy && <p role="status">Waiting for the native operation…</p>}
+    {busy && <p role="status">{t.waiting}</p>}
     {error && <p role="alert">{error}</p>}
-    {recoveryUnavailable && dispositions.includes("permanent") && <p>Permanent deletion remains a separate choice: select Review: Delete permanently, then confirm in Windows. It cannot be undone.</p>}
+    {recoveryUnavailable && dispositions.includes("permanent") && <p>{t.permanentSeparate}</p>}
     <dialog ref={dialog} className="storage-plan-dialog" aria-labelledby={headingId} aria-describedby={summaryId}
       onCancel={event => { event.preventDefault(); dismiss(); }}
       onKeyDown={event => {
+        // Browsers raise `cancel` for Escape; handling it here keeps the same path
+        // when the platform does not (preventDefault avoids a second cancel).
+        if (event.key === "Escape") { event.preventDefault(); dismiss(); return; }
         if (event.key !== "Tab") return;
         const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)");
         const first = buttons[0]; const last = buttons[buttons.length - 1];
         if (first && event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
         else if (last && !event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
       }}>
-      <h2 id={headingId}>{visible ? dispositionLabels[visible.disposition] : "Review cleanup"}</h2>
-      <p id={summaryId}>{visible?.selectedCount} {visible?.selectedCount === 1 ? "item" : "items"} · {formatBytes(visible?.selectedBytes ?? 0)} selected, not reclaimed.</p>
-      <p>This plan is fixed to the reviewed scan and selection. Changed files can be refused at execution.</p>
-      {visible?.disposition === "permanent" ? <p>This cannot be undone. Continuing opens a separate Windows confirmation.</p> :
-        <p>{visible?.disposition === "quarantine" ? "Files are held in app recovery storage on the same volume, without automatic purge. This does not free disk space." : "Files go to the Windows Recycle Bin where supported."} Undo is available only for items successfully retained for recovery.</p>}
+      <h2 id={headingId}>{visible ? dispositionLabels[visible.disposition] : t.reviewCleanup}</h2>
+      <p id={summaryId}>{t.planSummary(visible?.selectedCount, fmt.bytes(visible?.selectedBytes ?? 0))}</p>
+      <p>{t.planFixed}</p>
+      {visible?.disposition === "permanent" ? <p>{t.permanentWarning}</p> :
+        <p>{visible?.disposition === "quarantine" ? t.quarantineNote : t.recycleNote} {t.undoNote}</p>}
       <div className="dialog-actions">
-        <button ref={cancelButton} type="button" disabled={busy} onClick={dismiss}>Cancel review</button>
-        <button type="button" className={visible?.disposition === "permanent" ? "danger-button" : undefined} disabled={busy || !visible} onClick={confirm}>{visible?.disposition === "permanent" ? "Continue to Windows confirmation" : visible ? dispositionLabels[visible.disposition] : "Confirm"}</button>
+        <button ref={cancelButton} type="button" disabled={busy} onClick={dismiss}>{t.cancelReview}</button>
+        <button type="button" className={visible?.disposition === "permanent" ? "danger-button" : undefined} disabled={busy || !visible} onClick={confirm}>{visible?.disposition === "permanent" ? t.continueToWindows : visible ? dispositionLabels[visible.disposition] : t.confirm}</button>
       </div>
     </dialog>
-    {execution && <section aria-label="Latest storage cleanup outcome" className="cleanup-state-panel">
-      <h3>{successful(execution) ? "Cleanup finished" : "Cleanup needs attention"}</h3>
+    {execution && <section aria-label={t.latestOutcomeLabel} className="cleanup-state-panel">
+      <h3>{successful(execution) ? t.finished : t.needsAttention}</h3>
       <CleanupOutcomes key={execution.executionId} value={execution} expanded/>
     </section>}
-    {<section aria-label="Storage cleanup history"><h3>Recent cleanup history</h3>
+    {<section aria-label={t.historyLabel}><h3>{t.recentHistory}</h3>
       <ul className="storage-history">{history.records.map(item => <li key={item.executionId}>
-        <span>{dispositionLabels[item.disposition]} · {formatBytes(item.accounting.reclaimedBytes)} reclaimed{successful(item) ? "" : " · Needs attention"}</span>
+        <span>{t.historyRow(dispositionLabels[item.disposition], fmt.bytes(item.accounting.reclaimedBytes))}{successful(item) ? "" : ` · ${t.rowNeedsAttention}`}</span>
         <CleanupOutcomes value={item}/>
-        {canUndoCleanup(item) && <button type="button" disabled={busy} onClick={() => void perform(() => actions.undoCleanup(item.executionId), true)}>Undo cleanup</button>}
+        {canUndoCleanup(item) && <button type="button" disabled={busy} onClick={() => void perform(() => actions.undoCleanup(item.executionId), true)}>{t.undoCleanup}</button>}
       </li>)}</ul>
-      <p>Up to 20 executions per page. Undo can fail if retained files have changed.</p>
-      {history.loading && <p role="status">Loading cleanup history…</p>}
+      <p>{t.historyPaging}</p>
+      {history.loading && <p role="status">{t.loadingHistory}</p>}
       {history.error && <p role="alert">{history.error}</p>}
-      {!history.loaded && !history.loading && !history.error && <p>Cleanup history has not been loaded.</p>}
-      {history.loaded && !history.loading && !history.error && (history.records.length === 0 && history.currentCursor === null ? <p>No cleanup history yet.</p> : history.nextCursor === null && <p>End of cleanup history.</p>)}
-      <button type="button" disabled={busy || history.loading || history.nextCursor === null} onClick={() => void history.older()}>Older cleanup history</button>
+      {!history.loaded && !history.loading && !history.error && <p>{t.historyNotLoaded}</p>}
+      {history.loaded && !history.loading && !history.error && (history.records.length === 0 && history.currentCursor === null ? <p>{t.noHistory}</p> : history.nextCursor === null && <p>{t.endOfHistory}</p>)}
+      <button type="button" disabled={busy || history.loading || history.nextCursor === null} onClick={() => void history.older()}>{t.olderHistory}</button>
     </section>}
   </section>;
 }
