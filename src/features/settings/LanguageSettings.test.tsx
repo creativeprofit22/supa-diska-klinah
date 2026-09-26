@@ -41,7 +41,8 @@ describe("LanguageSettings", () => {
     fireEvent.change(select, { target: { value: "es-419" } });
     expect(await screen.findByRole("heading", { name: "Idioma" })).toBeTruthy();
     expect(loader.set).toHaveBeenCalledWith({ ...saved, language: "es-419" });
-    expect(document.documentElement.lang).toBe("es-419");
+    // The provider sets <html lang> in an effect after the translated render commits.
+    await waitFor(() => expect(document.documentElement.lang).toBe("es-419"));
   });
 
   it("applies a saved language at startup", async () => {

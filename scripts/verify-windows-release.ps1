@@ -99,17 +99,27 @@ try {
 
   $acl = Get-Acl -LiteralPath $resolvedInstallDirectory
   $broadPrincipals = @("S-1-1-0", "S-1-5-11", "S-1-5-32-545")
-  $writeMask = [Security.AccessControl.FileSystemRights]::Write -bor
-    [Security.AccessControl.FileSystemRights]::Modify -bor
-    [Security.AccessControl.FileSystemRights]::FullControl -bor
+  # Only bits that grant mutation. The composite Modify/FullControl values also carry
+  # read/execute bits, so masking with them flagged the normal Users ReadAndExecute
+  # (0x1200A9) grant that every Program Files folder has. Generic write/all (0x40000000,
+  # 0x10000000) stay in so inherit-only generic grants are still caught.
+  $writeMask = [int64](
+    [Security.AccessControl.FileSystemRights]::WriteData -bor
+    [Security.AccessControl.FileSystemRights]::AppendData -bor
+    [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor
+    [Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+    [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
     [Security.AccessControl.FileSystemRights]::Delete -bor
     [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
-    [Security.AccessControl.FileSystemRights]::TakeOwnership
-  foreach ($rule in $acl.Access) {
-    $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+    [Security.AccessControl.FileSystemRights]::TakeOwnership) -bor 0x50000000
+  # Read rules as SIDs directly: translating names can throw for unresolvable accounts,
+  # and a broken check must never be the reason a real grant goes unexamined.
+  foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    $sid = $rule.IdentityReference.Value
+    $rights = [int64]$rule.FileSystemRights -band 0xFFFFFFFFL
     if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
         $sid -in $broadPrincipals -and
-        ($rule.FileSystemRights -band $writeMask) -ne 0) {
+        ($rights -band $writeMask) -ne 0) {
       throw "A standard-user principal can modify the installed release: $sid"
     }
   }
