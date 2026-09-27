@@ -110,6 +110,19 @@ The storage driver was extended to cover the Recycle Bin and undo after a restar
 | Totals | As above; every total matches the bytes actually moved or removed |
 | Automatic cleanup, grace, due purge | Not rerun here. It still rests on the drill and the unit test (the deadline is forced, not waited out) |
 
+#### Automatic cleanup purge drill — day 0 of 2 (awaiting day 1 and acceptance)
+
+The installed app triggers the due purge in only two ways, and only while auto-cleanup is on: once at startup, and when the setting is saved as on (`set_policy` → `run_maintenance` → `purge_due`). The hourly timer runs build-artifact analysis only. Only temp-cleaner quarantines are auto-purged; storage-module quarantines never are. The grace period is 1–30 days on the real clock, so the shortest wait is 24 hours. The drill doesn't change the clock and adds no test hooks.
+
+The drill script is `scripts/acceptance-purge-drill.ps1`. Day 0 ran 2026-09-27 05:25:29–05:25:30 UTC from a standard shell, on the installed exe `9104D47A…`. The app was launched hidden (background mode, so it had no window or dialogs), with **TMP and TEMP both pointed at** the marked throwaway folder `%TEMP%\purge-drill-1b3568d4…` (with its `.acceptance-fixture` marker). Outcome `completed`. Artifacts: `.gg/smoke-artifacts/purge-drill/acceptance-day0.json` and `handoff.json`.
+
+- **Scope proof before switching it on:** the temp scan found exactly 1 candidate, the fixture's `cache` folder (524,288 bytes), with 0 outside the fixture. The drill aborts on anything else.
+- **Switched on with a 1-day grace:** it quarantined only that folder (execution `fc269afb…`): quarantined / occupied 524,288, **purged / reclaimed 0**. The quarantine store holds `payload.bin` with the original SHA-256 (`66684ACC…`).
+- **Grace deadline:** `purgeAfter` = 1790573130 = **2026-09-28 05:25:30 UTC**, exactly 86,400 s after it was quarantined.
+- **Switched back off:** the policy returned to the original `enabled: false, graceDays: 7`, and the app was closed.
+- **Existing records:** the 6 earlier quarantine records still hold 0 items (all `restored`), unchanged. The only new record is the drill's own.
+- **Day 1** runs after the deadline, on request ("run day 1"). No scheduled task was created.
+
 ## Build artifact budget drill
 
 **Current release status: drill accepted 2026-09-26; release still gated by [release verification](verification/release.md).** The 2026-09-05 items below describe only that executable, identified by its hash. The four items dated 2026-09-26 (budget enforcement/quarantine, protected artifact identities during enforcement, build-generation undo, and the complete screenshot set) were run on the installed per-machine candidate. They were repeated on the rebuilt installer carrying the protected-list layout fix, and the user accepted them; the full evidence is in release verification. The older alpha pass later in this document applies to its separate August candidate.
