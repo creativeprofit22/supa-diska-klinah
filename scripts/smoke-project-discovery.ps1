@@ -134,9 +134,18 @@ function Connect-WebViewDebugSocket {
       $targets = @(Invoke-RestMethod -Uri "http://127.0.0.1:$Port/json/list" -TimeoutSec 1)
       if ($targets.Count -gt 0) { break }
     }
-    # PowerShell 7 (HttpClient) raises HttpRequestException for refused connections and a
-    # cancellation/timeout exception when the 1-second budget elapses; both mean "not yet".
-    catch [Net.WebException], [Net.Http.HttpRequestException], [OperationCanceledException], [TimeoutException] {}
+    # "Not ready yet": Windows PowerShell 5.1 raises WebException; PowerShell 7 (HttpClient)
+    # raises HttpRequestException, or a cancellation/timeout when the 1-second budget elapses.
+    # HttpRequestException is matched by name because System.Net.Http is not loaded in 5.1,
+    # where a [Net.Http.HttpRequestException] literal fails to resolve. Anything else rethrows.
+    catch {
+      $failure = $_.Exception
+      $notReady = $failure -is [Net.WebException] -or
+        $failure -is [OperationCanceledException] -or
+        $failure -is [TimeoutException] -or
+        $failure.GetType().FullName -eq "System.Net.Http.HttpRequestException"
+      if (-not $notReady) { throw }
+    }
     Start-Sleep -Milliseconds 100
   }
   $target = $targets | Where-Object { $_.type -eq "page" } | Select-Object -First 1
