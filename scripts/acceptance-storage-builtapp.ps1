@@ -9,7 +9,8 @@ $ErrorActionPreference = "Stop"
 # smoke-storage-root.ps1 this DOES open the native picker and the native
 # permanent-deletion confirmation, so it requires a human at the machine.
 # It never sends synthetic desktop input and never captures the screen.
-# It mutates only disposable fixture roots it creates itself.
+# It mutates only disposable fixture roots it creates itself, including the
+# marked temp 'cache' folder it sends to the Recycle Bin and restores.
 . (Join-Path $PSScriptRoot "smoke-project-discovery.ps1")
 
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -54,6 +55,33 @@ function New-AcceptanceFixture {
   New-Item -ItemType Directory -Path (Join-Path $root "deep\l1\l2\l3\l4") -Force | Out-Null
   & $make (Join-Path $root "deep\l1\l2\l3\l4\deep.bin") (256KB) 44
   return $root
+}
+
+# Disposable Recycle Bin fixture. The temp cleaner only offers directories named
+# 'cache' or 'tmp' under the user's temp folder, so the run plants its own marked
+# parent there and selects only the exact 'cache' candidate inside it.
+function New-RecycleFixture {
+  $root = Join-Path ([IO.Path]::GetTempPath()) ("recycle-acceptance-" + [Guid]::NewGuid().ToString("n"))
+  New-Item -ItemType Directory -Path (Join-Path $root "cache") -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $root ".acceptance-fixture") -Value "disposable" -Encoding ASCII
+  $bytes = [byte[]]::new(512KB)
+  [Random]::new(55).NextBytes($bytes)
+  [IO.File]::WriteAllBytes((Join-Path $root "cache\payload.bin"), $bytes)
+  return $root
+}
+
+# Recycle Bin entries whose original folder is this run's fixture. Read-only.
+function Get-RecycleEntries {
+  param([Parameter(Mandatory = $true)][string]$Root)
+  $shell = New-Object -ComObject Shell.Application
+  $entries = @()
+  foreach ($item in $shell.Namespace(10).Items()) {
+    $original = $shell.Namespace(10).GetDetailsOf($item, 1)
+    if ($original -and [string]::Equals($original.TrimEnd("\"), $Root.TrimEnd("\"), [StringComparison]::OrdinalIgnoreCase)) {
+      $entries += [ordered]@{ name = $item.Name; originalFolder = $original }
+    }
+  }
+  return ,$entries
 }
 
 function Get-AcceptanceInventory {
@@ -145,6 +173,8 @@ $artifacts = (Resolve-Path -LiteralPath $ArtifactDirectory).Path
 
 $fixtureRoot = New-AcceptanceFixture -Parent ([IO.Path]::GetTempPath())
 $fixtureBefore = Get-AcceptanceInventory -Root $fixtureRoot
+$recycleRoot = New-RecycleFixture
+$recycleBefore = Get-AcceptanceInventory -Root $recycleRoot
 $crossVolumeRoot = ""
 if ($SecondVolumeRoot) {
   $crossVolumeRoot = New-AcceptanceFixture -Parent $SecondVolumeRoot
@@ -166,6 +196,9 @@ function Complete-AcceptanceRun {
   }
   # Only ever removes trees carrying this run's own ownership marker.
   $record.cleanup = [ordered]@{ fixtureRoot = Remove-AcceptanceFixture -Root $fixtureRoot }
+  $record.cleanup.recycleRoot = Remove-AcceptanceFixture -Root $recycleRoot
+  # A failed undo can leave this run's own item in the Recycle Bin; report it, never purge it.
+  $record.cleanup.recycleBinLeftovers = Get-RecycleEntries -Root $recycleRoot
   if ($crossVolumeRoot) { $record.cleanup.crossVolumeRoot = Remove-AcceptanceFixture -Root $crossVolumeRoot }
   $record.finishedUtc = (Get-Date).ToUniversalTime().ToString("o")
   $reportPath = Join-Path $artifacts "acceptance.json"
@@ -186,6 +219,8 @@ $record = [ordered]@{
   fixtureRoot = $fixtureRoot
   crossVolumeRoot = $crossVolumeRoot
   fixtureBefore = $fixtureBefore
+  recycleRoot = $recycleRoot
+  recycleBefore = $recycleBefore
   steps = [ordered]@{}
 }
 
@@ -514,6 +549,54 @@ try {
 "@
   $record.steps.afterPermanentConfirm = Get-AcceptanceInventory -Root $fixtureRoot
 
+  # --- Recycle Bin and exact undo on the temp cleaner --------------------
+  # Storage modules never offer the Recycle Bin; the temp cleaner does. Only the
+  # run's own marked 'cache' directory is selected, matched by exact path.
+  # Match on the run's unique folder name: the app may render the temp root in
+  # another form (for example with a \\?\ prefix), but the GUID leaf is exact.
+  $recycleTargetJson = ConvertTo-Json ("\" + (Split-Path $recycleRoot -Leaf) + "\cache")
+  $record.steps.recycle = Invoke-AcceptanceStep -Socket $socket -Name "recycle" -Body @"
+    const want = $recycleTargetJson.toLowerCase();
+    const preview = await plain('preview_cleanup', {});
+    const matches = preview.records.filter(r => r.displayPath.toLowerCase().endsWith(want));
+    if (matches.length !== 1) throw Error('expected exactly one fixture candidate, found ' + matches.length + ' of ' + preview.records.length);
+    const plan = await plain('create_cleanup_plan', { scanId: preview.scanId, candidateIds: [matches[0].id], disposition: 'recycleBin' });
+    const execution = await plain('execute_cleanup_plan', { planId: plan.planId });
+    window.__acceptanceRecycle = execution.executionId;
+    return {
+      candidate: { path: matches[0].displayPath, bytes: matches[0].bytes }, plan,
+      execution: { executionId: execution.executionId, disposition: execution.disposition, completed: execution.completed,
+        items: execution.items.map(i => ({ state: i.state, logicalBytes: i.logicalBytes, failure: i.failure ?? null })), accounting: execution.accounting }
+    };
+"@
+  $record.steps.afterRecycle = [ordered]@{
+    inventory = Get-AcceptanceInventory -Root $recycleRoot
+    recycleBin = Get-RecycleEntries -Root $recycleRoot
+  }
+  $record.steps.recycleUndo = Invoke-AcceptanceStep -Socket $socket -Name "recycleUndo" -Body @"
+    const summary = await plain('undo_cleanup', { executionId: window.__acceptanceRecycle });
+    return { executionId: summary.executionId, completed: summary.completed,
+      items: summary.items.map(i => ({ state: i.state, logicalBytes: i.logicalBytes, failure: i.failure ?? null })), accounting: summary.accounting };
+"@
+  $record.steps.afterRecycleUndo = [ordered]@{
+    inventory = Get-AcceptanceInventory -Root $recycleRoot
+    recycleBin = Get-RecycleEntries -Root $recycleRoot
+  }
+
+  # --- Quarantine held across a restart, undone by the restarted app ------
+  # Reuses the permanent-check scan: alpha.bin is unchanged since that scan.
+  $record.steps.quarantineBeforeRestart = Invoke-AcceptanceStep -Socket $socket -Name "quarantineBeforeRestart" -Body @"
+    const snapshotId = window.__acceptancePermanent.snapshotId;
+    const page = await invoke('storage_scan_page', { module:'largeFiles', snapshotId, collection:'files', pageSize: 10 });
+    const target = page.records.map(r => r.record).find(r => r.eligibility.kind === 'eligible' && /alpha\.bin$/i.test(r.displayPath));
+    if (!target) throw Error('alpha.bin is not an eligible candidate');
+    const plan = await invoke('create_storage_plan', { selection: { module:'largeFiles', snapshotId, candidateIds: [target.eligibility.candidate_id] }, disposition: 'quarantine' });
+    const execution = await plain('execute_cleanup_plan', { planId: plan.planId });
+    return { target: target.displayPath, executionId: execution.executionId, completed: execution.completed, purgeAfter: execution.purgeAfter ?? null,
+      items: execution.items.map(i => ({ state: i.state, logicalBytes: i.logicalBytes, failure: i.failure ?? null })), accounting: execution.accounting };
+"@
+  $record.steps.afterQuarantineBeforeRestart = Get-AcceptanceInventory -Root $fixtureRoot
+
   # Process-tree sample: the app plus every descendant (WebView2 browser, renderer,
   # GPU and utility processes). Bounded to descendants of the launched PID only.
   function Get-AppProcessTree {
@@ -603,6 +686,20 @@ try {
       const records = Array.isArray(history?.records) ? history.records : (Array.isArray(history) ? history : []);
       return { count: records.length, states: records.map(r => ({ disposition: r.disposition, completed: r.completed, items: r.items?.map(i => i.state) ?? null })) };
 "@
+  }
+  $heldExecution = $record.steps.quarantineBeforeRestart.executionId
+  if ($heldExecution) {
+    $heldJson = ConvertTo-Json ([string]$heldExecution)
+    $record.steps.undoAfterRestart = Invoke-AcceptanceStep -Socket $restartSocket -Name "undoAfterRestart" -Body @"
+      const summary = await plain('undo_cleanup', { executionId: $heldJson });
+      return { executionId: summary.executionId, completed: summary.completed,
+        items: summary.items.map(i => ({ state: i.state, logicalBytes: i.logicalBytes, failure: i.failure ?? null })), accounting: summary.accounting };
+"@
+    $record.steps.afterUndoAfterRestart = Get-AcceptanceInventory -Root $fixtureRoot
+  }
+  else {
+    $record.steps.undoAfterRestart = [ordered]@{ acceptanceStepFailed = $true; message = "no quarantine execution was held across the restart" }
+    $script:StepFailures += [ordered]@{ step = "undoAfterRestart"; code = $null; message = "no quarantine execution was held across the restart" }
   }
 }
 finally {
