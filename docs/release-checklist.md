@@ -98,6 +98,18 @@ The installer was built locally from `main` at `6e61eb4` (unsigned, SHA-256 `92D
 - **Accounting with the fix:** permanent selected / processed / purged / occupied / **reclaimed = 1,048,576**, failed / quarantined 0 (it was 0 on the old build). Quarantine then undo restored both items (5,242,880 bytes), and a restart deleted nothing on its own.
 - **UX note, not fixed:** the Yes/No warning accepts a single letter key when it has focus. Consider requiring an explicit click on a clearly labelled delete button.
 
+#### Installed-app gap closure — 2026-09-27 (awaiting acceptance)
+
+The storage driver was extended to cover the Recycle Bin and undo after a restart. It ran on the same installed build (exe SHA-256 `9104D47A…`) from a standard shell, 04:34–04:47 UTC. Outcome `completed`, zero failed steps, both fixtures removed, and no leftovers in the Recycle Bin. Artifacts: `.gg/smoke-artifacts/release-recycle-restart/acceptance.json`. Every dialog was answered by local UI automation, with no keyboard input from the user. Each answer was checked before it was pressed: No was verified as the default (`DM_GETDEFID` = 7), and Yes was pressed only after confirming the title and that the dialog named `gamma.bin`.
+
+| Item | Installed-app evidence (this run) |
+| --- | --- |
+| Recycle Bin and exact undo | The temp cleaner found exactly the run's own marked `cache` folder (524,288 bytes), and a `recycleBin` plan recycled it: the folder left disk, and the Recycle Bin listed it with the fixture as its original location. Undo restored it: same files, same SHA-256 (`B45DE93F…`), and the bin was empty again. Accounting: selected / processed / occupied 524,288, failed / quarantined / purged / reclaimed 0 (nothing freed while it's recoverable) |
+| Quarantine, restart, undo | `alpha.bin` (3,145,728 bytes) was quarantined and left disk. The app was then closed and relaunched, and the restarted app still listed the quarantine in history. Undo, invoked in the restarted app, restored it with the original SHA-256 (`711B29CD…`) |
+| Permanent deletion needs the second warning | No kept the file (`cancelledCleanly`). The verified Yes removed only `gamma.bin`: purged / occupied / **reclaimed = 1,048,576**, and undo was refused |
+| Totals | As above; every total matches the bytes actually moved or removed |
+| Automatic cleanup, grace, due purge | Not rerun here. It still rests on the drill and the unit test (the deadline is forced, not waited out) |
+
 ## Build artifact budget drill
 
 **Current release status: drill accepted 2026-09-26; release still gated by [release verification](verification/release.md).** The 2026-09-05 items below describe only that executable, identified by its hash. The four items dated 2026-09-26 (budget enforcement/quarantine, protected artifact identities during enforcement, build-generation undo, and the complete screenshot set) were run on the installed per-machine candidate. They were repeated on the rebuilt installer carrying the protected-list layout fix, and the user accepted them; the full evidence is in release verification. The older alpha pass later in this document applies to its separate August candidate.
