@@ -863,9 +863,16 @@ impl CleanupService {
                 } else {
                     self.storage_entry_guard(evidence, &protection)
                 };
+                // Permanent removal yields the free space sampled just before the delete.
                 let result = guard.and_then(|guard| match plan.disposition {
                     CleanupDisposition::Permanent => {
-                        guard.remove().map_err(|_| "permanent-remove-failed")
+                        let parent = planned.proof.path.parent().ok_or("invalid-parent")?;
+                        let before = self
+                            .file_system
+                            .free_space(parent)
+                            .map_err(|_| "space-sample-failed")?;
+                        guard.remove().map_err(|_| "permanent-remove-failed")?;
+                        Ok(Some(before))
                     }
                     CleanupDisposition::Quarantine => {
                         // Simplification ceiling: files only, same-volume handle rename;
@@ -877,15 +884,31 @@ impl CleanupService {
                                     .as_ref()
                                     .ok_or("quarantine-unavailable")?,
                             )
+                            .map(|()| None)
                             .map_err(|_| "quarantine-move-failed")
                     }
                     CleanupDisposition::RecycleBin => {
                         super::recycle::reject_identity_required(&guard)
+                            .map(|()| None)
                             .map_err(|_| "identity-required-recycle-unsupported")
                     }
                 });
                 match result {
-                    Ok(()) => {
+                    Ok(sampled_before) => {
+                        if let Some(before) = sampled_before {
+                            // As Kudu does: count the size measured before the delete, only
+                            // once removal succeeded. Reclaimed is the observed free-space
+                            // gain, never more than that size; an unreadable second sample
+                            // claims nothing.
+                            let occupied = planned.proof.allocated_bytes;
+                            journal.items[index].occupied_bytes = occupied;
+                            journal.items[index].reclaimed_bytes = planned
+                                .proof
+                                .path
+                                .parent()
+                                .and_then(|parent| self.file_system.free_space(parent).ok())
+                                .map_or(0, |after| after.saturating_sub(before).min(occupied));
+                        }
                         journal.items[index].processed = true;
                         journal.items[index].state =
                             if plan.disposition == CleanupDisposition::Quarantine {
@@ -2073,10 +2096,14 @@ mod tests {
 
     /// Adds a second user-selected file beside the fixture file, as its own plan item.
     fn add_storage_file_item(plan: &mut CleanupPlan, name: &str) -> PathBuf {
+        add_storage_file_item_with(plan, name, b"second item")
+    }
+
+    fn add_storage_file_item_with(plan: &mut CleanupPlan, name: &str, contents: &[u8]) -> PathBuf {
         use cleanup_core::storage::StorageEvidence;
         let mut item = plan.items[0].clone();
         let path = item.proof.path.with_file_name(name);
-        fs::write(&path, b"second item").unwrap();
+        fs::write(&path, contents).unwrap();
         let fs_native = WindowsFileSystem;
         let meta = fs_native.metadata_no_follow(&path).unwrap();
         let CandidateProofScope::Storage { evidence } = &item.proof.scope else {
@@ -2924,6 +2951,58 @@ mod tests {
             drop(service);
             fs::remove_dir_all(fixture).unwrap();
         }
+    }
+
+    // Kudu counts freed space as the measured size of each entry that is confirmed gone.
+    // The acceptance run on 2026-09-26 recorded 0 for a purged 1 MiB file.
+    #[test]
+    fn storage_permanent_delete_reports_the_measured_size_of_removed_items_only() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (fixture, app_data, storage, mut plan, blocked) = storage_file_fixture();
+        // Large enough to live outside the MFT record, so NTFS allocates real clusters.
+        let large = add_storage_file_item_with(&mut plan, "large.bin", &[0x5a; 64 * 1024]);
+        let measured = WindowsFileSystem
+            .allocated_size(
+                &large,
+                &WindowsFileSystem.metadata_no_follow(&large).unwrap(),
+            )
+            .unwrap();
+        assert!(
+            measured >= 64 * 1024,
+            "Windows reports the allocation: {measured}"
+        );
+        let blocked_logical = fs::metadata(&blocked).unwrap().len();
+        plan.plan_id = "7".repeat(32);
+        storage.create_plan(&plan).unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&blocked)
+            .unwrap();
+        let service = CleanupService::new(app_data).unwrap();
+
+        let result = service.execute_permanent(&plan.plan_id).unwrap();
+        drop(lock);
+
+        assert_eq!(result.items[0].state, ItemState::Failed);
+        assert!(blocked.exists(), "the locked item is untouched");
+        assert_eq!(result.items[1].state, ItemState::Purged);
+        assert!(!large.exists());
+        let accounting = &result.accounting;
+        assert_eq!(accounting.purged_bytes, measured);
+        assert_eq!(
+            accounting.occupied_bytes, measured,
+            "failed items occupy nothing freed"
+        );
+        assert_eq!(accounting.failed_bytes, blocked_logical);
+        assert_eq!(accounting.quarantined_bytes, 0);
+        assert!(
+            accounting.reclaimed_bytes <= measured,
+            "never claims more than was measured: {}",
+            accounting.reclaimed_bytes
+        );
+        drop(service);
+        fs::remove_dir_all(fixture).unwrap();
     }
 
     #[test]
