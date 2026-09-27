@@ -64,11 +64,11 @@ Observed result: cancellation was reported; process `11600` stayed unique and un
 
 Use only a newly created disposable directory containing synthetic files. Never use personal or shared data.
 
-- [ ] Preview, move one item to the Windows Recycle Bin, and undo the exact item.
-- [ ] Quarantine one item, restart the app, and undo it without duplicate removal.
+- [x] (Accepted by the user 2026-09-27.) Preview, move one item to the Windows Recycle Bin, and undo the exact item.
+- [x] (Accepted by the user 2026-09-27.) Quarantine one item, restart the app, and undo it without duplicate removal.
 - [ ] Enable automatic cleanup, verify the grace deadline, then verify due purge.
-- [ ] Confirm permanent deletion requires the second warning and removes only the selected item.
-- [ ] Record selected, processed, failed, quarantined, purged, occupied, and reclaimed totals.
+- [x] (Accepted by the user 2026-09-27.) Confirm permanent deletion requires the second warning and removes only the selected item.
+- [x] (Accepted by the user 2026-09-27.) Record selected, processed, failed, quarantined, purged, occupied, and reclaimed totals.
 
 ### Cleanup drill record — 2026-08-30
 
