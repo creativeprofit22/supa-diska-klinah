@@ -58,5 +58,5 @@ windows-sys = { version = "=0.61.2", features = [
 ] }
 
 [dev-dependencies]
-junction = "=2.0.0"
+junction = "=2.1.0"
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std"] }
